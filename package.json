@@ -1,0 +1,15 @@
+{
+  "name": "mobile-rpa",
+  "version": "1.0.0",
+  "description": "OpenClaw Mobile RPA Skill - Android automation via ADB",
+  "type": "module",
+  "main": "src/skill-cli.ts",
+  "scripts": {
+    "start": "bun run src/skill-cli.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.9",
+    "fast-check": "^3.22.0"
+  }
+}

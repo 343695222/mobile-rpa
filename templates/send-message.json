@@ -1,0 +1,80 @@
+{
+  "name": "send-message",
+  "description": "发送消息给指定联系人。打开短信应用，搜索联系人，选择联系人，输入消息内容并发送。",
+  "params": [
+    {
+      "name": "recipient",
+      "description": "消息接收人的姓名或电话号码",
+      "required": true
+    },
+    {
+      "name": "message",
+      "description": "要发送的消息内容",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": { "type": "key_event", "keyCode": 3 },
+      "description": "按 Home 键回到桌面",
+      "expectedScreenHint": "桌面主屏幕"
+    },
+    {
+      "order": 2,
+      "action": { "type": "tap", "x": 270, "y": 1600 },
+      "description": "点击短信应用图标打开短信",
+      "expectedScreenHint": "短信应用主界面"
+    },
+    {
+      "order": 3,
+      "action": { "type": "wait", "ms": 1000 },
+      "description": "等待短信应用加载完成"
+    },
+    {
+      "order": 4,
+      "action": { "type": "tap", "x": 540, "y": 150 },
+      "description": "点击搜索或新建消息按钮",
+      "expectedScreenHint": "搜索联系人或新建消息界面"
+    },
+    {
+      "order": 5,
+      "action": { "type": "input_text", "text": "{{recipient}}" },
+      "description": "输入收件人 {{recipient}}",
+      "expectedScreenHint": "联系人搜索结果中显示 {{recipient}}"
+    },
+    {
+      "order": 6,
+      "action": { "type": "wait", "ms": 800 },
+      "description": "等待联系人搜索结果加载"
+    },
+    {
+      "order": 7,
+      "action": { "type": "tap", "x": 540, "y": 350 },
+      "description": "点击搜索结果中匹配的联系人 {{recipient}}",
+      "expectedScreenHint": "与 {{recipient}} 的对话界面"
+    },
+    {
+      "order": 8,
+      "action": { "type": "tap", "x": 400, "y": 1800 },
+      "description": "点击消息输入框获取焦点",
+      "expectedScreenHint": "消息输入框已获取焦点，键盘弹出"
+    },
+    {
+      "order": 9,
+      "action": { "type": "input_text", "text": "{{message}}" },
+      "description": "输入消息内容：{{message}}"
+    },
+    {
+      "order": 10,
+      "action": { "type": "tap", "x": 980, "y": 1800 },
+      "description": "点击发送按钮",
+      "expectedScreenHint": "消息已发送，显示在对话列表中"
+    }
+  ],
+  "metadata": {
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "source": "manual",
+    "taskDescription": "发送消息给指定联系人"
+  }
+}

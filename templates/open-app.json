@@ -1,0 +1,47 @@
+{
+  "name": "open-app",
+  "description": "打开指定的 Android 应用。通过 Home 键回到桌面，上滑打开应用抽屉，搜索应用名称并点击打开。",
+  "params": [
+    {
+      "name": "packageName",
+      "description": "要打开的应用包名，例如 com.tencent.mm",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": { "type": "key_event", "keyCode": 3 },
+      "description": "按 Home 键回到桌面",
+      "expectedScreenHint": "桌面主屏幕"
+    },
+    {
+      "order": 2,
+      "action": { "type": "swipe", "x1": 540, "y1": 1800, "x2": 540, "y2": 400, "duration": 300 },
+      "description": "从底部上滑打开应用抽屉",
+      "expectedScreenHint": "应用抽屉或应用列表"
+    },
+    {
+      "order": 3,
+      "action": { "type": "input_text", "text": "{{packageName}}" },
+      "description": "在搜索框中输入应用包名 {{packageName}}",
+      "expectedScreenHint": "搜索结果中显示目标应用"
+    },
+    {
+      "order": 4,
+      "action": { "type": "wait", "ms": 1000 },
+      "description": "等待搜索结果加载"
+    },
+    {
+      "order": 5,
+      "action": { "type": "tap", "x": 540, "y": 400 },
+      "description": "点击搜索结果中的第一个匹配应用",
+      "expectedScreenHint": "目标应用 {{packageName}} 已打开"
+    }
+  ],
+  "metadata": {
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "source": "manual",
+    "taskDescription": "打开指定的 Android 应用"
+  }
+}

@@ -1,0 +1,15 @@
+[project]
+name = "u2-server"
+version = "0.1.0"
+description = "uiautomator2 FastAPI service for OpenClaw mobile-automation plugin"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "uiautomator2>=3",
+    "httpx>=0.28",
+    "pillow>=11",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
