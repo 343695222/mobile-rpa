@@ -47,7 +47,7 @@ curl -s -X POST http://localhost:9400/vision/analyze \
 
 ## 🔍 OCR 文字识别
 
-截图并识别屏幕上所有文字，返回结构化的文字内容和位置：
+截图并用专用 OCR 模型（qwen-vl-ocr-latest）识别屏幕上所有文字：
 
 ```bash
 curl -s -X POST http://localhost:9400/vision/ocr \
@@ -56,6 +56,13 @@ curl -s -X POST http://localhost:9400/vision/ocr \
 ```
 
 返回：`{"success": true, "data": {"text": "[顶部-状态栏] 10:30 WiFi...\n[中部] 微信\n...", "model": "qwen-vl-ocr-latest"}}`
+
+自定义 prompt（提取特定信息）：
+```bash
+curl -s -X POST http://localhost:9400/vision/ocr \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e", "prompt": "提取屏幕上所有联系人的名字，每行一个"}'
+```
 
 如果需要更灵活的分析（比如"屏幕上有哪些按钮"），用 `/vision/analyze` 自定义 prompt。
 

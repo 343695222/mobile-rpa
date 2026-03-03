@@ -353,7 +353,9 @@ async def vision_analyze(req: VisionAnalyzeRequest) -> ApiResponse:
 
 class VisionOcrRequest(BaseModel):
     device_id: str
-    language: str = "auto"
+    mode: Literal["raw", "structured"] = "structured"
+    prompt: str | None = None
+
 
 
 @app.post("/vision/ocr")
@@ -362,13 +364,11 @@ async def vision_ocr(req: VisionOcrRequest) -> ApiResponse:
     if not _dashscope_api_key:
         return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
     b64 = device_manager.screenshot_base64(req.device_id)
-    # qwen-vl-ocr-latest 不传 prompt 时默认提取所有文字；
-    # 传 prompt 可以做结构化提取，这里用中文 prompt 让输出带位置标注
-    ocr_prompt = (
-        "请识别这张手机截图上的所有文字内容。"
-        "按从上到下、从左到右的顺序，逐行列出所有可见文字。"
-        "对于每一行文字，标注其大致位置（顶部/中部/底部）。"
-        "输出格式：\n[位置] 文字内容"
+    # qwen-vl-ocr-latest 默认 prompt 是纯文字提取，不带位置；
+    # 手机截图场景加位置标注更实用，方便 agent 定位元素
+    ocr_prompt = req.prompt or (
+        "这是一张Android手机截图。请按从上到下顺序，逐行输出所有可见文字，"
+        "每行前标注位置（顶部/中部/底部），格式：[位置] 文字内容"
     )
     result = await ocr_client.analyze(b64, ocr_prompt)
     if not result.get("success"):
