@@ -1,7 +1,7 @@
 """
 OpenClaw 自然语言交互 Agent
 
-交互式命令行工具，接收自然语言输入，通过 GLM 理解意图，
+交互式命令行工具，接收自然语言输入，通过百炼平台 qwen-turbo 理解意图，
 自动生成 JSON 指令调用 skill-cli.ts 执行手机操作。
 
 用法：
@@ -20,23 +20,21 @@ import sys
 
 import httpx
 
+from dashscope_client import DashScopeTextClient
+
 # ============================================================
 # 配置
 # ============================================================
 
-GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-GLM_API_KEY = os.environ.get(
-    "GLM_API_KEY",
-    "bbbeb98f39904758a4168fa1228fc33e.XyTbD6d7SNcqMJKa",
-)
-GLM_MODEL = "glm-4v-plus"
+_text_model = os.environ.get("DASHSCOPE_TEXT_MODEL", "qwen-turbo")
+text_client = DashScopeTextClient(model=_text_model)
 DEFAULT_DEVICE = "a394960e"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_CLI = os.path.join(PROJECT_ROOT, "src", "skill-cli.ts")
 U2_BASE = "http://localhost:9400"
 
 # ============================================================
-# SKILL.md 加载（让 GLM 知道有哪些能力）
+# SKILL.md 加载（让 LLM 知道有哪些能力）
 # ============================================================
 
 def load_skill_md() -> str:
@@ -108,28 +106,12 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OpenClaw 移动端自动化 Agent。用户会
 
 
 # ============================================================
-# GLM 调用
+# LLM 调用（百炼平台 DashScopeTextClient）
 # ============================================================
 
-async def call_glm(messages: list[dict]) -> str:
-    """调用 GLM 模型，返回文本响应。"""
-    headers = {
-        "Authorization": f"Bearer {GLM_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": GLM_MODEL,
-        "max_tokens": 300,
-        "temperature": 0.1,
-        "messages": messages,
-    }
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.post(GLM_API_URL, headers=headers, json=payload)
-        if resp.status_code != 200:
-            return f"GLM API 错误: {resp.status_code} {resp.text[:200]}"
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+async def call_llm(messages: list[dict]) -> str:
+    """调用百炼平台文本模型，返回文本响应。"""
+    return await text_client.chat(messages)
 
 # ============================================================
 # 指令执行
@@ -224,11 +206,11 @@ async def execute_command(json_cmd: dict) -> dict:
     return execute_skill_command(json_cmd)
 
 # ============================================================
-# 结果摘要（让 GLM 把结果翻译成人话）
+# 结果摘要（让 LLM 把结果翻译成人话）
 # ============================================================
 
 async def summarize_result(user_input: str, json_cmd: dict, result: dict) -> str:
-    """让 GLM 把执行结果翻译成自然语言。"""
+    """让 LLM 把执行结果翻译成自然语言。"""
     messages = [
         {
             "role": "system",
@@ -248,7 +230,7 @@ async def summarize_result(user_input: str, json_cmd: dict, result: dict) -> str
             ),
         },
     ]
-    return await call_glm(messages)
+    return await call_llm(messages)
 
 
 # ============================================================
@@ -276,7 +258,7 @@ async def main():
     print("=" * 50)
     print("  OpenClaw 自然语言手机控制 Agent")
     print(f"  设备: {device_id}")
-    print(f"  模型: {GLM_MODEL}")
+    print(f"  模型: {_text_model}")
     print("  输入 'quit' 或 'exit' 退出")
     print("=" * 50)
     print()
@@ -306,16 +288,16 @@ async def main():
             print("再见！")
             break
 
-        # 1. GLM 理解意图，生成 JSON 指令
+        # 1. LLM 理解意图，生成 JSON 指令
         conversation.append({"role": "user", "content": user_input})
 
         print("🤔 理解中...")
-        glm_response = await call_glm(conversation)
+        llm_response = await call_llm(conversation)
 
         # 解析 JSON
         try:
             # 去掉可能的 markdown 代码块
-            clean = glm_response.strip()
+            clean = llm_response.strip()
             if clean.startswith("```"):
                 clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
                 if clean.endswith("```"):
@@ -323,8 +305,8 @@ async def main():
                 clean = clean.strip()
             json_cmd = json.loads(clean)
         except json.JSONDecodeError:
-            print(f"⚠️  GLM 返回了非 JSON 内容: {glm_response[:200]}")
-            conversation.append({"role": "assistant", "content": glm_response})
+            print(f"⚠️  模型返回了非 JSON 内容: {llm_response[:200]}")
+            conversation.append({"role": "assistant", "content": llm_response})
             continue
 
         print(f"📋 指令: {json.dumps(json_cmd, ensure_ascii=False)}")

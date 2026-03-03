@@ -15,8 +15,8 @@
 | 本地 Windows 项目 | D:\abnjd |
 | 云端项目路径 | ~/.openclaw/workspace/skills/mobile-rpa |
 | ADB 云端路径 | /opt/adb |
-| GLM API Key | bbbeb98f39904758a4168fa1228fc33e.XyTbD6d7SNcqMJKa |
-| GLM 模型 | glm-4.6v（付费版，非 flash） |
+| DashScope API Key | (通过环境变量 DASHSCOPE_API_KEY 配置) |
+| 视觉模型 | GUI-Plus (gui-plus) + 通义千问 VL (qwen-vl-max) |
 
 ### 端口一览
 
@@ -299,13 +299,13 @@ echo '{"type": "collect_data", "deviceId": "a394960e", "app": "微信", "dataTyp
 echo '{"type": "autox_execute", "action": "ocr"}' | bun run src/skill-cli.ts
 ```
 
-### 4.7 GLM-4.6V 视觉分析
+### 4.7 DashScope 视觉分析
 
 ```bash
 curl -X POST http://localhost:9400/vision/analyze \
   -H "Content-Type: application/json" \
   -d '{"device_id": "a394960e", "prompt": "请描述屏幕上的内容"}'
-# 预期: 返回 GLM 对当前屏幕的分析结果
+# 预期: 返回 DashScope VL 模型对当前屏幕的分析结果
 ```
 
 ---

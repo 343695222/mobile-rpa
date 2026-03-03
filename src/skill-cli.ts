@@ -4,8 +4,6 @@ import type { ActionExecutor } from "./action-executor";
 import type { TemplateEngine } from "./template-engine";
 import type { RpaLoop } from "./rpa-loop";
 import type { Logger } from "./logger";
-import type { VisionClient } from "./vision-client";
-import type { VisionAgent } from "./vision-agent";
 import type { CommandType, ParsedCommand, SkillResponse } from "./types";
 import { callU2, checkU2Health } from "./u2-proxy";
 import { AutoXClient } from "./autox-client";
@@ -147,8 +145,6 @@ export class DefaultSkillCli implements SkillCli {
     private readonly templateEngine: TemplateEngine,
     private readonly rpaLoop: RpaLoop,
     private readonly logger: Logger,
-    private readonly visionClient?: VisionClient,
-    private readonly visionAgent?: VisionAgent,
   ) {}
 
   async handleCommand(input: string): Promise<SkillResponse> {
@@ -465,34 +461,17 @@ export class DefaultSkillCli implements SkillCli {
     if (!deviceId) {
       return { status: "error", message: "deviceId is required for analyze_screen" };
     }
-    if (!this.visionClient) {
-      return { status: "error", message: "Vision client not configured (missing GLM API key)" };
-    }
 
-    const base64 = await this.adbClient.screenshot(deviceId);
-    const analysisPrompt = prompt || "请详细描述这个手机屏幕上的内容，包括所有可见的文字、按钮、图标和界面元素。";
-
-    // 流式输出：边接收边写到 stderr，用户能实时看到结果
-    process.stderr.write("\n[分析中] ");
-    const result = await this.visionClient.analyzeImageStream(
-      base64,
-      analysisPrompt,
-      (chunk) => process.stderr.write(chunk),
-    );
-    process.stderr.write("\n\n");
-
-    if (!result.success) {
-      return { status: "error", message: `Vision analysis failed: ${result.error}` };
-    }
+    // 通过 Python U2 服务代理视觉分析（DashScope 百炼平台）
+    const result = await callU2("/vision/analyze", {
+      device_id: deviceId,
+      prompt: prompt || "请详细描述这个手机屏幕上的内容，包括所有可见的文字、按钮、图标和界面元素。",
+    });
 
     return {
-      status: "success",
-      message: "Screen analyzed",
-      data: {
-        analysis: result.description,
-        model: result.model,
-        screenshotLength: base64.length,
-      },
+      status: result.success ? "success" : "error",
+      message: result.success ? "Screen analyzed" : (result.message || "Vision analysis failed"),
+      data: result.data,
     };
   }
 
@@ -503,83 +482,18 @@ export class DefaultSkillCli implements SkillCli {
     if (!taskGoal) {
       return { status: "error", message: "taskGoal is required for smart_task" };
     }
-    if (!this.visionAgent) {
-      return { status: "error", message: "Vision agent not configured (missing GLM API key)" };
-    }
 
-    const maxSteps = 20;
-    const history: string[] = [];
-    const steps: Array<{ step: number; reasoning: string; action: unknown; success: boolean }> = [];
-    const agent = this.visionAgent as any; // 访问 prefetchScreenshot
-
-    for (let i = 1; i <= maxSteps; i++) {
-      process.stderr.write(`\n[步骤 ${i}] 截图+分析中...`);
-      const decision = await this.visionAgent.decideNextAction(deviceId, taskGoal, history);
-
-      if (!decision.success) {
-        process.stderr.write(` 失败\n`);
-        return {
-          status: "error",
-          message: `Vision agent error at step ${i}: ${decision.error}`,
-          data: { stepsCompleted: i - 1, steps },
-        };
-      }
-
-      if (decision.done) {
-        process.stderr.write(` 完成: ${decision.reasoning}\n`);
-        steps.push({ step: i, reasoning: decision.reasoning, action: null, success: true });
-        return {
-          status: "success",
-          message: `Task completed in ${i} steps: ${decision.reasoning}`,
-          data: { stepsCompleted: i, steps },
-        };
-      }
-
-      if (!decision.action) {
-        process.stderr.write(` 无操作\n`);
-        return {
-          status: "error",
-          message: `Vision agent returned no action at step ${i}`,
-          data: { stepsCompleted: i - 1, steps },
-        };
-      }
-
-      process.stderr.write(` → ${decision.reasoning} → ${JSON.stringify(decision.action)}\n`);
-
-      // 执行操作
-      const result = await this.actionExecutor.execute(deviceId, decision.action);
-      steps.push({
-        step: i,
-        reasoning: decision.reasoning,
-        action: decision.action,
-        success: result.success,
-      });
-
-      history.push(`${decision.reasoning} → ${JSON.stringify(decision.action)} → ${result.success ? "成功" : "失败: " + result.error}`);
-
-      if (history.length > 5) {
-        history.shift();
-      }
-
-      if (!result.success) {
-        return {
-          status: "error",
-          message: `Action failed at step ${i}: ${result.error}`,
-          data: { stepsCompleted: i, steps },
-        };
-      }
-
-      // 等界面响应，同时预取下一张截图（并行）
-      await new Promise((r) => setTimeout(r, 800));
-      if (typeof agent.prefetchScreenshot === "function") {
-        agent.prefetchScreenshot(deviceId);
-      }
-    }
+    // 通过 Python U2 服务代理智能任务（DashScope 百炼平台 GUI-Plus 模型）
+    const result = await callU2("/vision/smart_task", {
+      device_id: deviceId,
+      goal: taskGoal,
+      max_steps: 20,
+    });
 
     return {
-      status: "error",
-      message: `Reached max steps (${maxSteps}) without completing task`,
-      data: { stepsCompleted: maxSteps, steps },
+      status: result.success ? "success" : "error",
+      message: result.message,
+      data: result.data,
     };
   }
 
@@ -958,22 +872,11 @@ async function main(): Promise<void> {
   const { DefaultTemplateEngine } = await import("./template-engine");
   const { DefaultRpaLoop } = await import("./rpa-loop");
   const { FileLogger } = await import("./logger");
-  const { GlmVisionClient } = await import("./vision-client");
-
   const adbClient = new BunAdbClient();
   const screenParser = new DefaultScreenParser(adbClient);
   const actionExecutor = new DefaultActionExecutor(adbClient, screenParser);
   const templateEngine = new DefaultTemplateEngine();
   const logger = new FileLogger("skill.log");
-
-  // GLM-4.6V 视觉模型客户端（通过环境变量或默认 API Key 配置）
-  const glmApiKey = process.env.GLM_API_KEY || "bbbeb98f39904758a4168fa1228fc33e.XyTbD6d7SNcqMJKa";
-  const glmModel = process.env.GLM_MODEL || "glm-4.6v";
-  const visionClient = glmApiKey ? new GlmVisionClient(glmApiKey, glmModel) : undefined;
-
-  // 视觉智能 Agent（截图 → GLM-4.6V 分析 → 决定操作）
-  const { GlmVisionAgent } = await import("./vision-agent");
-  const visionAgent = visionClient ? new GlmVisionAgent(adbClient, visionClient) : undefined;
 
   // Load templates from the templates directory
   await templateEngine.loadTemplates("templates");
@@ -981,6 +884,8 @@ async function main(): Promise<void> {
   // 混合方案：不提供 decideAction，自由探索由 Agent 逐步调用驱动
   const rpaLoop = new DefaultRpaLoop(screenParser, actionExecutor, templateEngine);
 
+  // 视觉分析和智能任务现在全部通过 Python U2 服务代理（DashScope 百炼平台）
+  // 不再需要 TypeScript 侧的 VisionClient/VisionAgent
   const cli = new DefaultSkillCli(
     adbClient,
     screenParser,
@@ -988,8 +893,6 @@ async function main(): Promise<void> {
     templateEngine,
     rpaLoop,
     logger,
-    visionClient,
-    visionAgent,
   );
 
   // Read all stdin

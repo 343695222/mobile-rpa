@@ -41,7 +41,7 @@ install: cd u2-server && uv sync
 |------|--------|------|---------|
 | `api` | 最高 | 直接调用 App 的 HTTP API 获取数据 | 已知 API 接口的 App |
 | `rpa_copy` | 中 | 导航到目标页面→长按→全选→复制→读剪贴板 | 文本内容为主的页面 |
-| `rpa_ocr` | 最低 | 导航到目标页面→截图→GLM-4.6V OCR 识别→翻页→合并 | 复杂布局或图片内容 |
+| `rpa_ocr` | 最低 | 导航到目标页面→截图→DashScope VL OCR 识别→翻页→合并 | 复杂布局或图片内容 |
 
 ## 指令调用
 
@@ -159,4 +159,4 @@ curl -X DELETE http://localhost:9400/scripts/{script_id}
 
 - U2 服务（`mobile-u2`）已启动并运行于 9400 端口
 - Android 设备已连接且 uiautomator2 agent 已推送
-- （视觉分析/OCR 策略）环境变量 `GLM_API_KEY` 已设置
+- （视觉分析/OCR 策略）环境变量 `DASHSCOPE_API_KEY` 已设置

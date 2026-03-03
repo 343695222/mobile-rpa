@@ -9,6 +9,8 @@ AutoJS 服务: localhost:9501 (frp 映射)
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from typing import Any
 
@@ -17,9 +19,13 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from action_mapper import KEY_MAP
 from autox_device import AutoXDevice, AutoXDeviceError
+from dashscope_client import DashScopeVLClient, GuiPlusClient
 from safety_guard import SafetyGuard
-from vision import GlmVisionClient
+from vision_agent import VisionAgent
+
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -102,11 +108,107 @@ autox = AutoXDevice()
 # Safety guard
 safety_guard = SafetyGuard(mode="strict")
 
-# Vision client
-_glm_api_key = os.environ.get(
-    "GLM_API_KEY", "bbbeb98f39904758a4168fa1228fc33e.XyTbD6d7SNcqMJKa"
+# Vision components (require DASHSCOPE_API_KEY)
+_dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+_gui_model = os.environ.get("DASHSCOPE_GUI_MODEL", "gui-plus")
+_vl_model = os.environ.get("DASHSCOPE_VL_MODEL", "qwen-vl-max")
+
+if not _dashscope_api_key:
+    _logger.warning(
+        "DASHSCOPE_API_KEY is not set — vision and smart task endpoints will not work"
+    )
+
+gui_plus_client = GuiPlusClient(api_key=_dashscope_api_key, model=_gui_model)
+vl_client = DashScopeVLClient(api_key=_dashscope_api_key, model=_vl_model)
+
+
+# ---------------------------------------------------------------------------
+# AutoXVisionAgent — adapts VisionAgent for async AutoXDevice
+# ---------------------------------------------------------------------------
+
+
+class AutoXVisionAgent(VisionAgent):
+    """VisionAgent subclass that works with AutoXDevice's async interface.
+
+    Overrides screenshot and action execution to use AutoXDevice instead of
+    the sync DeviceManager.
+    """
+
+    def __init__(
+        self,
+        autox_device: AutoXDevice,
+        gui_plus_client: GuiPlusClient,
+        safety_guard: SafetyGuard | None = None,
+    ) -> None:
+        # Pass None for device_manager — we override the methods that use it
+        super().__init__(
+            device_manager=None,  # type: ignore[arg-type]
+            gui_plus_client=gui_plus_client,
+            safety_guard=safety_guard,
+        )
+        self.autox = autox_device
+
+    async def decide_next_action(
+        self,
+        device_id: str,
+        goal: str,
+        history: list[dict],
+    ) -> dict[str, Any]:
+        """Screenshot via AutoXDevice → GuiPlusClient.decide → parse."""
+        try:
+            base64_img = await self.autox.screenshot_base64()
+            result = await self.gui_plus_client.decide(base64_img, goal, history)
+            return self._parse_gui_plus_response(result)
+        except Exception as exc:
+            return {
+                "success": False,
+                "action": None,
+                "reasoning": "",
+                "done": False,
+                "error": str(exc),
+            }
+
+    async def _execute_action(
+        self, device_id: str, action: dict[str, Any]
+    ) -> None:
+        """Dispatch action dict to AutoXDevice async methods."""
+        action_type = action.get("type", "")
+
+        if action_type == "tap":
+            await self.autox.click(int(action["x"]), int(action["y"]))
+
+        elif action_type == "input_text":
+            await self.autox.input_text(action["text"])
+
+        elif action_type == "swipe":
+            duration = action.get("duration", 500)
+            await self.autox.swipe(
+                int(action["x1"]),
+                int(action["y1"]),
+                int(action["x2"]),
+                int(action["y2"]),
+                int(duration),
+            )
+
+        elif action_type == "key_event":
+            key_code = int(action["keyCode"])
+            key_name = next(
+                (k for k, v in KEY_MAP.items() if v == key_code), str(key_code)
+            )
+            await self.autox.key_event(key_name)
+
+        elif action_type == "wait":
+            await asyncio.sleep(action.get("ms", 1000) / 1000.0)
+
+        else:
+            raise ValueError(f"Unknown action type: {action_type}")
+
+
+autox_vision_agent = AutoXVisionAgent(
+    autox_device=autox,
+    gui_plus_client=gui_plus_client,
+    safety_guard=safety_guard,
 )
-vision_client = GlmVisionClient(api_key=_glm_api_key, model="glm-4.6v")
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +463,10 @@ async def run_script(req: RunScriptRequest):
 
 @app.post("/vision/analyze")
 async def vision_analyze(req: VisionAnalyzeRequest):
+    if not _dashscope_api_key:
+        return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
     b64 = await autox.screenshot_base64()
-    result = await vision_client.analyze(b64, req.prompt)
+    result = await vl_client.analyze(b64, req.prompt)
     if not result.get("success"):
         return ApiResponse(success=False, message=result.get("error", "Vision analysis failed"))
     return ApiResponse(success=True, message="OK", data=result)
@@ -370,136 +474,20 @@ async def vision_analyze(req: VisionAnalyzeRequest):
 
 @app.post("/vision/smart_task")
 async def vision_smart_task(req: SmartTaskRequest):
-    """AI 驱动的智能任务循环"""
-    import asyncio
-    
-    max_steps = req.max_steps
-    history: list[str] = []
-    steps: list[dict] = []
-    
-    for i in range(1, max_steps + 1):
-        # 截图
-        b64 = await autox.screenshot_base64()
-        
-        # 构建 prompt
-        history_text = "\n".join(history[-5:]) if history else "无"
-        prompt = f"""你是一个手机自动化助手。
-
-当前任务目标: {req.goal}
-
-最近操作历史:
-{history_text}
-
-请分析当前屏幕，决定下一步操作。
-
-输出格式（JSON）:
-{{
-  "done": true/false,  // 任务是否已完成
-  "reasoning": "分析和决策理由",
-  "action": {{  // 如果 done=false，给出下一步操作
-    "type": "click/swipe/input/back/home/scroll/wait",
-    "x": 数字,  // click/swipe 需要
-    "y": 数字,
-    "x2": 数字,  // swipe 需要
-    "y2": 数字,
-    "text": "文本",  // input 需要
-    "direction": "up/down"  // scroll 需要
-  }}
-}}
-
-只输出 JSON，不要其他文字。"""
-        
-        result = await vision_client.analyze(b64, prompt)
-        if not result.get("success"):
-            return ApiResponse(
-                success=False,
-                message=f"Vision error at step {i}",
-                data={"steps": steps},
-            )
-        
-        # 解析响应
-        import json
-        import re
-        
-        text = result.get("description", "")
-        # 提取 JSON
-        match = re.search(r'\{[\s\S]*\}', text)
-        if not match:
-            steps.append({"step": i, "error": "无法解析响应"})
-            continue
-        
-        try:
-            decision = json.loads(match.group())
-        except json.JSONDecodeError:
-            steps.append({"step": i, "error": "JSON 解析失败"})
-            continue
-        
-        reasoning = decision.get("reasoning", "")
-        
-        # 检查是否完成
-        if decision.get("done"):
-            steps.append({"step": i, "reasoning": reasoning, "done": True})
-            return ApiResponse(
-                success=True,
-                message=f"Task completed in {i} steps: {reasoning}",
-                data={"steps": steps},
-            )
-        
-        # 执行操作
-        action = decision.get("action", {})
-        action_type = action.get("type", "")
-        
-        try:
-            if action_type == "click":
-                x, y = action.get("x", 0), action.get("y", 0)
-                # Safety check
-                check = safety_guard.check_action({"type": "tap", "x": x, "y": y}, reasoning=reasoning)
-                if not check.allowed:
-                    steps.append({"step": i, "reasoning": reasoning, "blocked": check.reason})
-                    history.append(f"步骤{i}: 被安全守卫拦截 - {check.reason}")
-                    await autox.press_back()  # 自动返回
-                    continue
-                await autox.click(x, y)
-            elif action_type == "swipe":
-                await autox.swipe(
-                    action.get("x", 0), action.get("y", 0),
-                    action.get("x2", 0), action.get("y2", 0),
-                    action.get("duration", 500),
-                )
-            elif action_type == "input":
-                text = action.get("text", "")
-                check = safety_guard.check_text_input(text, reasoning=reasoning)
-                if not check.allowed:
-                    steps.append({"step": i, "reasoning": reasoning, "blocked": check.reason})
-                    history.append(f"步骤{i}: 输入被拦截 - {check.reason}")
-                    continue
-                await autox.input_text(text)
-            elif action_type == "back":
-                await autox.press_back()
-            elif action_type == "home":
-                await autox.press_home()
-            elif action_type == "scroll":
-                await autox.scroll(action.get("direction", "down"))
-            elif action_type == "wait":
-                await asyncio.sleep(action.get("duration", 1000) / 1000)
-            else:
-                steps.append({"step": i, "error": f"未知操作类型: {action_type}"})
-                continue
-            
-            steps.append({"step": i, "reasoning": reasoning, "action": action})
-            history.append(f"步骤{i}: {reasoning} → {action_type}")
-            
-        except Exception as e:
-            steps.append({"step": i, "error": str(e)})
-            history.append(f"步骤{i}: 执行失败 - {e}")
-        
-        # 等待界面响应
-        await asyncio.sleep(0.8)
-    
+    """AI 驱动的智能任务循环（通过 AutoXVisionAgent + GuiPlusClient）"""
+    if not _dashscope_api_key:
+        return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
+    result = await autox_vision_agent.run_task("autox", req.goal, req.max_steps)
+    if not result.get("success"):
+        return ApiResponse(
+            success=False,
+            message=result.get("message", "Smart task failed"),
+            data=result,
+        )
     return ApiResponse(
-        success=False,
-        message=f"Reached max steps ({max_steps})",
-        data={"steps": steps},
+        success=True,
+        message=result.get("message", "Task completed"),
+        data=result,
     )
 
 

@@ -22,7 +22,7 @@ from device import DeviceManager
 from navigator import Navigator
 from script_store import ScriptStore
 from strategies import ApiStrategy, RpaCopyStrategy, RpaOcrStrategy
-from vision import GlmVisionClient
+from dashscope_client import DashScopeVLClient
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class DataCollector:
         device_manager: DeviceManager,
         navigator: Navigator,
         script_store: ScriptStore,
-        vision_client: GlmVisionClient,
+        vision_client: DashScopeVLClient,
     ) -> None:
         self.device_manager = device_manager
         self.navigator = navigator

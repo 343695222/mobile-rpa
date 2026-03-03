@@ -1,6 +1,6 @@
 ---
 name: mobile-u2
-description: 基于 uiautomator2 的高性能 Android 设备操作服务，提供快速截图、元素查找、文本输入和 GLM-4.6V 视觉分析能力
+description: 基于 uiautomator2 的高性能 Android 设备操作服务，提供快速截图、元素查找、文本输入和 DashScope 百炼平台视觉分析能力
 requires:
   - python3.10
   - uv
@@ -10,7 +10,7 @@ install: cd u2-server && uv sync
 
 # Mobile U2 Skill
 
-基于 uiautomator2 和 FastAPI 的 Python 设备操作服务，运行于云服务器 9400 端口。相比 ADB 直连方式，截图速度提升约 24 倍（500ms vs 12s），并支持中文输入、XPath 选择器、剪贴板读写等高级功能。同时集成 GLM-4.6V 视觉语言模型，提供屏幕截图分析和视觉驱动的智能任务执行能力。
+基于 uiautomator2 和 FastAPI 的 Python 设备操作服务，运行于云服务器 9400 端口。相比 ADB 直连方式，截图速度提升约 24 倍（500ms vs 12s），并支持中文输入、XPath 选择器、剪贴板读写等高级功能。同时集成 DashScope 百炼平台视觉语言模型（GUI-Plus + 通义千问 VL），提供屏幕截图分析和视觉驱动的智能任务执行能力。
 
 ## 能力范围
 
@@ -26,8 +26,8 @@ install: cd u2-server && uv sync
 - App 启动、停止、获取当前前台 App
 
 ### 视觉分析
-- 截图 + GLM-4.6V 视觉分析（自定义 prompt）
-- 智能任务循环：截图→GLM 分析→决定操作→执行操作，直到任务完成或达到步骤上限
+- 截图 + DashScope 视觉分析（自定义 prompt，通义千问 VL 模型）
+- 智能任务循环：截图→GUI-Plus 分析→决定操作→执行操作，直到任务完成或达到步骤上限
 
 ### 数据采集
 - 多策略数据采集编排（api > rpa_copy > rpa_ocr）
@@ -67,7 +67,7 @@ install: cd u2-server && uv sync
 
 | 方法 | 路径 | 请求体 | 说明 |
 |------|------|--------|------|
-| POST | `/vision/analyze` | `{device_id, prompt}` | 截图 + GLM 分析 |
+| POST | `/vision/analyze` | `{device_id, prompt}` | 截图 + DashScope 分析 |
 | POST | `/vision/smart_task` | `{device_id, goal, max_steps?}` | 智能任务循环 |
 
 ### 数据采集端点
@@ -119,7 +119,7 @@ curl -X POST http://localhost:9400/vision/analyze \
 - uv（Python 包管理工具）
 - ADB 已安装，Android 设备已连接
 - uiautomator2 agent 已推送到手机（`python -m uiautomator2 init`）
-- （视觉分析）环境变量 `GLM_API_KEY` 已设置
+- （视觉分析）环境变量 `DASHSCOPE_API_KEY` 已设置
 
 ## 启动方式
 

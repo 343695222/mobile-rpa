@@ -6,6 +6,7 @@ Runs on port 9400 (configurable via U2_SERVER_PORT env var).
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Literal
 
@@ -22,7 +23,7 @@ from script_store import ScriptStore
 from traffic_capture import TrafficCapture
 from traffic_analyzer import TrafficAnalyzer
 from validator import ScriptValidator
-from vision import GlmVisionClient
+from dashscope_client import DashScopeVLClient, GuiPlusClient
 from vision_agent import VisionAgent
 
 # ---------------------------------------------------------------------------
@@ -107,14 +108,24 @@ safety_guard = SafetyGuard(mode="strict")
 traffic_capture = TrafficCapture()
 traffic_analyzer = TrafficAnalyzer()
 
-# Vision components (require GLM_API_KEY)
-_glm_api_key = os.environ.get(
-    "GLM_API_KEY", "bbbeb98f39904758a4168fa1228fc33e.XyTbD6d7SNcqMJKa"
-)
-vision_client = GlmVisionClient(api_key=_glm_api_key, model="glm-4.6v")
+# Vision components (require DASHSCOPE_API_KEY)
+_logger = logging.getLogger(__name__)
+
+_dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+_gui_model = os.environ.get("DASHSCOPE_GUI_MODEL", "gui-plus")
+_vl_model = os.environ.get("DASHSCOPE_VL_MODEL", "qwen-vl-max")
+_text_model = os.environ.get("DASHSCOPE_TEXT_MODEL", "qwen-turbo")
+
+if not _dashscope_api_key:
+    _logger.warning(
+        "DASHSCOPE_API_KEY is not set — vision and smart task endpoints will not work"
+    )
+
+gui_plus_client = GuiPlusClient(api_key=_dashscope_api_key, model=_gui_model)
+vl_client = DashScopeVLClient(api_key=_dashscope_api_key, model=_vl_model)
 vision_agent = VisionAgent(
     device_manager=device_manager,
-    vision_client=vision_client,
+    gui_plus_client=gui_plus_client,
     safety_guard=safety_guard,
 )
 
@@ -130,7 +141,7 @@ data_collector = DataCollector(
     device_manager=device_manager,
     navigator=navigator,
     script_store=script_store,
-    vision_client=vision_client,
+    vision_client=vl_client,
 )
 
 # Script validator
@@ -142,7 +153,7 @@ _strategies = {
     "api": ApiStrategy(),
     "rpa_copy": RpaCopyStrategy(device_manager=device_manager, navigator=navigator),
     "rpa_ocr": RpaOcrStrategy(
-        device_manager=device_manager, navigator=navigator, vision_client=vision_client
+        device_manager=device_manager, navigator=navigator, vision_client=vl_client
     ),
 }
 script_validator = ScriptValidator(
@@ -330,10 +341,10 @@ async def ui_hierarchy(device_id: str) -> ApiResponse:
 
 @app.post("/vision/analyze")
 async def vision_analyze(req: VisionAnalyzeRequest) -> ApiResponse:
-    if not _glm_api_key:
-        return ApiResponse(success=False, message="GLM_API_KEY is not set")
+    if not _dashscope_api_key:
+        return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
     b64 = device_manager.screenshot_base64(req.device_id)
-    result = await vision_client.analyze(b64, req.prompt)
+    result = await vl_client.analyze(b64, req.prompt)
     if not result.get("success"):
         return ApiResponse(success=False, message=result.get("error", "Vision analysis failed"), data=result)
     return ApiResponse(success=True, message="OK", data=result)
@@ -341,8 +352,8 @@ async def vision_analyze(req: VisionAnalyzeRequest) -> ApiResponse:
 
 @app.post("/vision/smart_task")
 async def vision_smart_task(req: SmartTaskRequest) -> ApiResponse:
-    if not _glm_api_key:
-        return ApiResponse(success=False, message="GLM_API_KEY is not set")
+    if not _dashscope_api_key:
+        return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
     result = await vision_agent.run_task(req.device_id, req.goal, req.max_steps)
     if not result.get("success"):
         return ApiResponse(success=False, message=result.get("message", "Smart task failed"), data=result)
