@@ -9,147 +9,167 @@ metadata: {"clawdbot":{"emoji":"📱","requires":{"bins":["bun"]}}}
 
 本 Skill 为 OpenClaw AI Agent 提供移动端 RPA（机器人流程自动化）能力。
 
-## ⚠️ 重要：必须使用 AutoJS 指令
+## ⚠️ 执行方式（必读）
 
-**所有手机操作必须使用 `autox_*` 系列指令**，旧的 ADB 指令已废弃。
+**所有手机操作通过 HTTP API 执行**，服务运行在 `http://localhost:9400`。
 
-常用指令：
-- 截图：`autox_screenshot`（不是 `screenshot`）
-- 点击：`autox_click`（不是 `execute_action`）
-- 滑动：`autox_swipe`
-- 输入：`autox_input`
-- 返回：`autox_key` (key="back")
-- 打开应用：`autox_app_start`
+使用 `curl` 命令调用，所有响应为 JSON 格式：`{"success": true/false, "message": "...", "data": ...}`
 
-## 能力范围
+**截图返回的 base64 图片可以直接用 `<qqimg>` 标签发送。**
 
-- 截图并返回 base64 图片
-- 点击、长按、滑动、滚动屏幕
-- 输入文本
-- 按键（返回、Home、最近任务）
-- 启动/停止应用
-- 获取当前前台应用
-- 查找和点击 UI 元素
-- 获取 UI 树结构
-- OCR 识别屏幕文字
-- 读写剪贴板
-- AI 驱动的智能任务循环
+## 常用操作速查
 
-## 调用方式
+### 截图
+```bash
+curl -s -X POST http://localhost:9400/screenshot
+```
+返回：`{"success":true,"data":{"base64":"...","format":"jpeg"}}`
 
-通过向 Skill 发送 JSON 格式的指令来调用各项功能。
+截图后将 base64 保存为文件再发送：
+```bash
+curl -s -X POST http://localhost:9400/screenshot | python3 -c "import sys,json; d=json.load(sys.stdin); open('/tmp/screen.jpg','wb').write(__import__('base64').b64decode(d['data']['base64']))"
+```
+然后用 `<qqimg>/tmp/screen.jpg</qqimg>` 发送。
 
-### AutoJS 指令（必须使用）
-
-| 指令类型 | 说明 | 参数 |
-|---------|------|------|
-| `autox_health` | 检查 AutoJS 服务状态 | 无 |
-| `autox_device_info` | 获取设备信息 | 无 |
-| `autox_screenshot` | 截图（base64 JPEG） | 无 |
-| `autox_click` | 点击坐标 | `x`, `y` |
-| `autox_long_click` | 长按坐标 | `x`, `y`, `duration?` |
-| `autox_swipe` | 滑动 | `x1`, `y1`, `x2`, `y2`, `duration?` |
-| `autox_scroll` | 滚动屏幕 | `direction` (up/down) |
-| `autox_input` | 输入文本 | `text` |
-| `autox_key` | 按键 | `key` (back/home/recents/power) |
-| `autox_app_start` | 启动应用 | `packageName` |
-| `autox_app_stop` | 停止应用 | `packageName` |
-| `autox_app_current` | 获取当前前台应用 | 无 |
-| `autox_find_element` | 查找元素 | `by`, `value`, `timeout?` |
-| `autox_click_element` | 查找并点击元素 | `by`, `value`, `timeout?` |
-| `autox_ui_tree` | 获取 UI 树 | `maxDepth?` |
-| `autox_ocr` | OCR 识别屏幕文字 | 无 |
-| `autox_clipboard` | 读写剪贴板 | `text?` (有则写，无则读) |
-| `autox_smart_task` | AI 驱动智能任务 | `taskGoal`, `maxSteps?` |
-
-### 指令示例
-
-截图：
-```json
-{ "type": "autox_screenshot" }
+### 点击
+```bash
+curl -s -X POST http://localhost:9400/click -H "Content-Type: application/json" -d '{"x":540,"y":960}'
 ```
 
-点击操作：
-```json
-{ "type": "autox_click", "x": 540, "y": 960 }
-{ "type": "autox_long_click", "x": 540, "y": 960, "duration": 1000 }
+### 长按
+```bash
+curl -s -X POST http://localhost:9400/long_click -H "Content-Type: application/json" -d '{"x":540,"y":960,"duration":1000}'
 ```
 
-滑动和滚动：
-```json
-{ "type": "autox_swipe", "x1": 540, "y1": 1500, "x2": 540, "y2": 500, "duration": 500 }
-{ "type": "autox_scroll", "direction": "down" }
+### 滑动
+```bash
+curl -s -X POST http://localhost:9400/swipe -H "Content-Type: application/json" -d '{"x1":540,"y1":1500,"x2":540,"y2":500,"duration":500}'
 ```
 
-文本输入：
-```json
-{ "type": "autox_input", "text": "Hello World" }
+### 滚动
+```bash
+curl -s -X POST http://localhost:9400/scroll -H "Content-Type: application/json" -d '{"direction":"down"}'
+```
+direction 可选：`up`, `down`
+
+### 输入文本
+```bash
+curl -s -X POST http://localhost:9400/input -H "Content-Type: application/json" -d '{"text":"Hello World"}'
 ```
 
-按键：
-```json
-{ "type": "autox_key", "key": "back" }
-{ "type": "autox_key", "key": "home" }
+### 按键
+```bash
+curl -s -X POST http://localhost:9400/key -H "Content-Type: application/json" -d '{"key":"back"}'
+```
+key 可选：`back`, `home`, `recents`, `power`
+
+快捷方式：
+```bash
+curl -s -X POST http://localhost:9400/back
+curl -s -X POST http://localhost:9400/home
 ```
 
-应用管理：
-```json
-{ "type": "autox_app_start", "packageName": "com.tencent.mm" }
-{ "type": "autox_app_stop", "packageName": "com.tencent.mm" }
-{ "type": "autox_app_current" }
+### 启动应用
+```bash
+curl -s -X POST http://localhost:9400/app/start -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
 ```
 
-元素操作：
-```json
-{ "type": "autox_find_element", "by": "text", "value": "微信" }
-{ "type": "autox_click_element", "by": "text", "value": "确定", "timeout": 5000 }
+### 停止应用
+```bash
+curl -s -X POST http://localhost:9400/app/stop -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
 ```
 
-UI 树和 OCR：
-```json
-{ "type": "autox_ui_tree", "maxDepth": 3 }
-{ "type": "autox_ocr" }
+### 获取当前前台应用
+```bash
+curl -s http://localhost:9400/app/current
 ```
 
-剪贴板：
-```json
-{ "type": "autox_clipboard" }
-{ "type": "autox_clipboard", "text": "要复制的内容" }
+### 查找元素
+```bash
+curl -s -X POST http://localhost:9400/find_element -H "Content-Type: application/json" -d '{"by":"text","value":"微信","timeout":3000}'
+```
+by 可选：`text`, `id`, `desc`, `className`
+
+### 点击元素（按文本/ID查找并点击）
+```bash
+curl -s -X POST http://localhost:9400/click_element -H "Content-Type: application/json" -d '{"by":"text","value":"确定","timeout":5000}'
 ```
 
-AI 智能任务：
-```json
-{ "type": "autox_smart_task", "taskGoal": "打开微信并发送消息给张三", "maxSteps": 20 }
+### 获取 UI 树
+```bash
+curl -s http://localhost:9400/ui_tree
 ```
 
-检查服务状态：
-```json
-{ "type": "autox_health" }
+### OCR 识别屏幕文字
+```bash
+curl -s -X POST http://localhost:9400/ocr
 ```
 
-## 响应格式
-
-所有指令执行后返回统一的 JSON 响应：
-
-```json
-{
-  "status": "success",
-  "message": "Screenshot captured",
-  "data": { "base64": "...", "format": "jpeg" }
-}
+### 剪贴板
+读取：
+```bash
+curl -s http://localhost:9400/clipboard
+```
+写入：
+```bash
+curl -s -X POST http://localhost:9400/clipboard -H "Content-Type: application/json" -d '{"text":"要复制的内容"}'
 ```
 
-## 前置条件
-
-- 手机安装 AutoX.js 或 AutoJs6 App
-- 开启无障碍服务和悬浮窗权限
-- 运行 `autox/autox-server-v2.js` 脚本（端口 9500）
-- SSH 隧道已建立（本地电脑执行 `adb forward` + `ssh -R`）
-
-详细部署说明见 `deploy/DEPLOY-SIMPLE.md`。
-
-## 架构
-
+### 检查服务状态
+```bash
+curl -s http://localhost:9400/health
 ```
-Agent → Bun/TS CLI → HTTP → AutoJS (手机:9500 via SSH隧道:9501)
+
+### 获取设备信息
+```bash
+curl -s http://localhost:9400/device/info
 ```
+
+### 执行自定义 AutoJS 脚本
+```bash
+curl -s -X POST http://localhost:9400/run_script -H "Content-Type: application/json" -d '{"script":"toast(\"Hello\")"}'
+```
+
+### AI 视觉分析
+```bash
+curl -s -X POST http://localhost:9400/vision/analyze -H "Content-Type: application/json" -d '{"prompt":"请描述屏幕上的内容"}'
+```
+
+### AI 智能任务
+```bash
+curl -s -X POST http://localhost:9400/vision/smart_task -H "Content-Type: application/json" -d '{"goal":"打开微信并发送消息给张三","max_steps":20}'
+```
+
+## 常见应用包名
+
+| 应用 | 包名 |
+|------|------|
+| 微信 | com.tencent.mm |
+| QQ | com.tencent.mobileqq |
+| 抖音 | com.ss.android.ugc.aweme |
+| 支付宝 | com.eg.android.AlipayGphone |
+| 淘宝 | com.taobao.taobao |
+| 设置 | com.android.settings |
+| 浏览器 | com.android.browser |
+
+## 典型工作流示例
+
+### 截图并发送给用户
+```bash
+# 1. 截图并保存
+curl -s -X POST http://localhost:9400/screenshot | python3 -c "import sys,json; d=json.load(sys.stdin); open('/tmp/screen.jpg','wb').write(__import__('base64').b64decode(d['data']['base64']))"
+# 2. 发送图片（用 qqimg 标签）
+```
+然后回复：`<qqimg>/tmp/screen.jpg</qqimg>`
+
+### 打开微信
+```bash
+curl -s -X POST http://localhost:9400/app/start -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
+```
+
+## 注意事项
+
+1. 所有操作前建议先 `curl -s http://localhost:9400/health` 检查服务是否正常
+2. 如果服务返回连接错误，说明 AutoJS 或 SSH 隧道断开，需要用户重新连接
+3. 截图返回 base64 编码的 JPEG 图片，需要解码后保存为文件才能发送
+4. 点击坐标基于屏幕分辨率，OPPO 手机通常为 1080x2400
