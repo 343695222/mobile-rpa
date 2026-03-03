@@ -1,143 +1,157 @@
 ---
 name: mobile-rpa
-description: 移动端 RPA 自动化 Skill，通过 AutoJS 直连控制 Android 设备，支持截图、点击、滑动、文本输入、应用管理等操作
-install: bun install
-metadata: {"clawdbot":{"emoji":"📱","requires":{"bins":["bun"]}}}
+description: 移动端 RPA 自动化 Skill，通过 U2 Service (uiautomator2 + DashScope GUI-Plus 视觉模型) 控制 Android 设备，支持智能任务、截图、点击、滑动、文本输入、应用管理、视觉分析等操作
+install: cd u2-server && uv sync
+metadata: {"clawdbot":{"emoji":"📱","requires":{"bins":["curl"]}}}
 ---
 
 # Mobile RPA Skill
 
-本 Skill 为 OpenClaw AI Agent 提供移动端 RPA（机器人流程自动化）能力。
+本 Skill 为 OpenClaw AI Agent 提供移动端 RPA 能力，通过 U2 Service REST API 操控 Android 设备。
 
-## ⚠️ 执行方式（必读）
+## ⚠️ 核心原则（必读）
 
-**所有手机操作通过 HTTP API 执行**，服务运行在 `http://localhost:9400`。
+1. **所有手机操作通过 HTTP API 执行**，服务地址 `http://localhost:9400`
+2. **复杂任务优先用 smart_task**：涉及多步操作（如"找到某人并发消息"、"打开某 App 做某事"）时，直接调用 `/vision/smart_task`，让 GUI-Plus 视觉模型自动完成，不要自己一步步拼命令
+3. **简单操作用基础 API**：单步操作（如截图、点击、启动 App）直接调对应端点
+4. **设备 ID 固定为 `a394960e`**
+5. 截图返回 base64 编码，保存为文件后用 `<qqimg>` 标签发送
 
-使用 `curl` 命令调用，所有响应为 JSON 格式：`{"success": true/false, "message": "...", "data": ...}`
+## 🚀 智能任务（推荐，复杂操作首选）
 
-**截图返回的 base64 图片可以直接用 `<qqimg>` 标签发送。**
+对于需要多步操作的任务，直接用 smart_task，AI 视觉模型会自动截图→分析→操作→循环：
 
-## 常用操作速查
+```bash
+curl -s -X POST http://localhost:9400/vision/smart_task \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e", "goal": "在微信中找到王浩婷并发送消息你好", "max_steps": 20}'
+```
+
+适用场景举例：
+- "打开微信发消息给张三" → smart_task
+- "往下滑动找到某人" → smart_task
+- "打开设置连接 WiFi" → smart_task
+- "在淘宝搜索某商品" → smart_task
+
+返回：`{"success": true, "message": "Task completed", "data": {"steps": [...], "final_action": "FINISH"}}`
+
+## 📸 视觉分析
+
+截图并用 AI 分析屏幕内容：
+
+```bash
+curl -s -X POST http://localhost:9400/vision/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e", "prompt": "屏幕上有哪些可点击的按钮？"}'
+```
+
+## 🔍 OCR 文字识别
+
+截图并识别屏幕上所有文字，返回结构化的文字内容和位置：
+
+```bash
+curl -s -X POST http://localhost:9400/vision/ocr \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e"}'
+```
+
+返回：`{"success": true, "data": {"text": "[顶部-状态栏] 10:30 WiFi...\n[中部] 微信\n...", "model": "qwen-vl-ocr-latest"}}`
+
+如果需要更灵活的分析（比如"屏幕上有哪些按钮"），用 `/vision/analyze` 自定义 prompt。
+
+## 基础操作 API
 
 ### 截图
 ```bash
-curl -s -X POST http://localhost:9400/screenshot
+curl -s -X POST http://localhost:9400/device/a394960e/screenshot
 ```
-返回：`{"success":true,"data":{"base64":"...","format":"jpeg"}}`
+返回：`{"success":true,"message":"OK","data":"<base64>"}`
 
-截图后将 base64 保存为文件再发送：
+截图保存为文件并发送：
 ```bash
-curl -s -X POST http://localhost:9400/screenshot | python3 -c "import sys,json; d=json.load(sys.stdin); open('/tmp/screen.jpg','wb').write(__import__('base64').b64decode(d['data']['base64']))"
+curl -s -X POST http://localhost:9400/device/a394960e/screenshot | python3 -c "import sys,json,base64; d=json.load(sys.stdin); open('/tmp/screen.png','wb').write(base64.b64decode(d['data']))"
 ```
-然后用 `<qqimg>/tmp/screen.jpg</qqimg>` 发送。
+然后用 `<qqimg>/tmp/screen.png</qqimg>` 发送。
 
-### 点击
+### 点击坐标
 ```bash
-curl -s -X POST http://localhost:9400/click -H "Content-Type: application/json" -d '{"x":540,"y":960}'
-```
-
-### 长按
-```bash
-curl -s -X POST http://localhost:9400/long_click -H "Content-Type: application/json" -d '{"x":540,"y":960,"duration":1000}'
+curl -s -X POST http://localhost:9400/device/a394960e/click \
+  -H "Content-Type: application/json" -d '{"x":540,"y":960}'
 ```
 
 ### 滑动
 ```bash
-curl -s -X POST http://localhost:9400/swipe -H "Content-Type: application/json" -d '{"x1":540,"y1":1500,"x2":540,"y2":500,"duration":500}'
+curl -s -X POST http://localhost:9400/device/a394960e/swipe \
+  -H "Content-Type: application/json" -d '{"x1":540,"y1":1500,"x2":540,"y2":500,"duration":0.5}'
 ```
 
-### 滚动
+### 输入文本（支持中文）
 ```bash
-curl -s -X POST http://localhost:9400/scroll -H "Content-Type: application/json" -d '{"direction":"down"}'
-```
-direction 可选：`up`, `down`
-
-### 输入文本
-```bash
-curl -s -X POST http://localhost:9400/input -H "Content-Type: application/json" -d '{"text":"Hello World"}'
+curl -s -X POST http://localhost:9400/device/a394960e/input_text \
+  -H "Content-Type: application/json" -d '{"text":"你好"}'
 ```
 
 ### 按键
 ```bash
-curl -s -X POST http://localhost:9400/key -H "Content-Type: application/json" -d '{"key":"back"}'
+curl -s -X POST http://localhost:9400/device/a394960e/key_event \
+  -H "Content-Type: application/json" -d '{"key_code":4}'
 ```
-key 可选：`back`, `home`, `recents`, `power`
+常用 key_code：4=返回, 3=Home, 187=最近任务, 66=回车
 
-快捷方式：
+### 查找元素
 ```bash
-curl -s -X POST http://localhost:9400/back
-curl -s -X POST http://localhost:9400/home
+curl -s -X POST http://localhost:9400/device/a394960e/find_element \
+  -H "Content-Type: application/json" -d '{"by":"text","value":"微信"}'
+```
+by 可选：`text`, `resourceId`, `xpath`
+
+### 点击元素（按文本/ID 查找并点击）
+```bash
+curl -s -X POST http://localhost:9400/device/a394960e/click_element \
+  -H "Content-Type: application/json" -d '{"by":"text","value":"确定"}'
 ```
 
 ### 启动应用
 ```bash
-curl -s -X POST http://localhost:9400/app/start -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
+curl -s -X POST http://localhost:9400/device/a394960e/app_start \
+  -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
 ```
 
 ### 停止应用
 ```bash
-curl -s -X POST http://localhost:9400/app/stop -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
+curl -s -X POST http://localhost:9400/device/a394960e/app_stop \
+  -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
 ```
 
 ### 获取当前前台应用
 ```bash
-curl -s http://localhost:9400/app/current
-```
-
-### 查找元素
-```bash
-curl -s -X POST http://localhost:9400/find_element -H "Content-Type: application/json" -d '{"by":"text","value":"微信","timeout":3000}'
-```
-by 可选：`text`, `id`, `desc`, `className`
-
-### 点击元素（按文本/ID查找并点击）
-```bash
-curl -s -X POST http://localhost:9400/click_element -H "Content-Type: application/json" -d '{"by":"text","value":"确定","timeout":5000}'
-```
-
-### 获取 UI 树
-```bash
-curl -s http://localhost:9400/ui_tree
-```
-
-### OCR 识别屏幕文字
-```bash
-curl -s -X POST http://localhost:9400/ocr
+curl -s http://localhost:9400/device/a394960e/current_app
 ```
 
 ### 剪贴板
 读取：
 ```bash
-curl -s http://localhost:9400/clipboard
+curl -s http://localhost:9400/device/a394960e/clipboard
 ```
 写入：
 ```bash
-curl -s -X POST http://localhost:9400/clipboard -H "Content-Type: application/json" -d '{"text":"要复制的内容"}'
+curl -s -X POST http://localhost:9400/device/a394960e/clipboard \
+  -H "Content-Type: application/json" -d '{"text":"要复制的内容"}'
 ```
 
-### 检查服务状态
+### UI 层级树
+```bash
+curl -s http://localhost:9400/device/a394960e/ui_hierarchy
+```
+
+### 设备列表
+```bash
+curl -s http://localhost:9400/devices
+```
+
+### 健康检查
 ```bash
 curl -s http://localhost:9400/health
-```
-
-### 获取设备信息
-```bash
-curl -s http://localhost:9400/device/info
-```
-
-### 执行自定义 AutoJS 脚本
-```bash
-curl -s -X POST http://localhost:9400/run_script -H "Content-Type: application/json" -d '{"script":"toast(\"Hello\")"}'
-```
-
-### AI 视觉分析
-```bash
-curl -s -X POST http://localhost:9400/vision/analyze -H "Content-Type: application/json" -d '{"prompt":"请描述屏幕上的内容"}'
-```
-
-### AI 智能任务
-```bash
-curl -s -X POST http://localhost:9400/vision/smart_task -H "Content-Type: application/json" -d '{"goal":"打开微信并发送消息给张三","max_steps":20}'
 ```
 
 ## 常见应用包名
@@ -152,24 +166,38 @@ curl -s -X POST http://localhost:9400/vision/smart_task -H "Content-Type: applic
 | 设置 | com.android.settings |
 | 浏览器 | com.android.browser |
 
-## 典型工作流示例
+## 典型工作流
 
-### 截图并发送给用户
+### 复杂任务（推荐 smart_task）
+用户说"打开微信找到张三发消息你好"：
 ```bash
-# 1. 截图并保存
-curl -s -X POST http://localhost:9400/screenshot | python3 -c "import sys,json; d=json.load(sys.stdin); open('/tmp/screen.jpg','wb').write(__import__('base64').b64decode(d['data']['base64']))"
-# 2. 发送图片（用 qqimg 标签）
+curl -s -X POST http://localhost:9400/vision/smart_task \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e", "goal": "打开微信，找到张三，发送消息你好", "max_steps": 20}'
 ```
-然后回复：`<qqimg>/tmp/screen.jpg</qqimg>`
 
-### 打开微信
+### 简单任务（直接调 API）
+用户说"截个图"：
 ```bash
-curl -s -X POST http://localhost:9400/app/start -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
+curl -s -X POST http://localhost:9400/device/a394960e/screenshot | python3 -c "import sys,json,base64; d=json.load(sys.stdin); open('/tmp/screen.png','wb').write(base64.b64decode(d['data']))"
+```
+然后回复：`<qqimg>/tmp/screen.png</qqimg>`
+
+用户说"打开微信"：
+```bash
+curl -s -X POST http://localhost:9400/device/a394960e/app_start -H "Content-Type: application/json" -d '{"package":"com.tencent.mm"}'
+```
+
+## 统一响应格式
+
+```json
+{"success": true, "message": "操作描述", "data": ...}
 ```
 
 ## 注意事项
 
-1. 所有操作前建议先 `curl -s http://localhost:9400/health` 检查服务是否正常
-2. 如果服务返回连接错误，说明 AutoJS 或 SSH 隧道断开，需要用户重新连接
-3. 截图返回 base64 编码的 JPEG 图片，需要解码后保存为文件才能发送
-4. 点击坐标基于屏幕分辨率，OPPO 手机通常为 1080x2400
+1. 操作前先 `curl -s http://localhost:9400/health` 检查服务状态
+2. 如果返回连接错误，说明 U2 Service 或 ADB 隧道断开
+3. 点击坐标基于屏幕分辨率（OPPO 手机 1080x2400）
+4. smart_task 超时时间较长（最多几分钟），适合复杂多步任务
+5. 不要用 `adb shell` 直接操作手机，全部走 HTTP API

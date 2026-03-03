@@ -114,6 +114,7 @@ _logger = logging.getLogger(__name__)
 _dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
 _gui_model = os.environ.get("DASHSCOPE_GUI_MODEL", "gui-plus")
 _vl_model = os.environ.get("DASHSCOPE_VL_MODEL", "qwen-vl-max")
+_ocr_model = os.environ.get("DASHSCOPE_OCR_MODEL", "qwen-vl-ocr-latest")
 _text_model = os.environ.get("DASHSCOPE_TEXT_MODEL", "qwen-turbo")
 
 if not _dashscope_api_key:
@@ -123,6 +124,7 @@ if not _dashscope_api_key:
 
 gui_plus_client = GuiPlusClient(api_key=_dashscope_api_key, model=_gui_model)
 vl_client = DashScopeVLClient(api_key=_dashscope_api_key, model=_vl_model)
+ocr_client = DashScopeVLClient(api_key=_dashscope_api_key, model=_ocr_model)
 vision_agent = VisionAgent(
     device_manager=device_manager,
     gui_plus_client=gui_plus_client,
@@ -348,6 +350,34 @@ async def vision_analyze(req: VisionAnalyzeRequest) -> ApiResponse:
     if not result.get("success"):
         return ApiResponse(success=False, message=result.get("error", "Vision analysis failed"), data=result)
     return ApiResponse(success=True, message="OK", data=result)
+
+class VisionOcrRequest(BaseModel):
+    device_id: str
+    language: str = "auto"
+
+
+@app.post("/vision/ocr")
+async def vision_ocr(req: VisionOcrRequest) -> ApiResponse:
+    """截图 + qwen-vl-ocr-latest 专用 OCR 模型做文字识别。"""
+    if not _dashscope_api_key:
+        return ApiResponse(success=False, message="DASHSCOPE_API_KEY is not set")
+    b64 = device_manager.screenshot_base64(req.device_id)
+    # qwen-vl-ocr-latest 不传 prompt 时默认提取所有文字；
+    # 传 prompt 可以做结构化提取，这里用中文 prompt 让输出带位置标注
+    ocr_prompt = (
+        "请识别这张手机截图上的所有文字内容。"
+        "按从上到下、从左到右的顺序，逐行列出所有可见文字。"
+        "对于每一行文字，标注其大致位置（顶部/中部/底部）。"
+        "输出格式：\n[位置] 文字内容"
+    )
+    result = await ocr_client.analyze(b64, ocr_prompt)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "OCR failed"), data=result)
+    return ApiResponse(success=True, message="OK", data={
+        "text": result.get("description", ""),
+        "model": result.get("model", ""),
+    })
+
 
 
 @app.post("/vision/smart_task")
