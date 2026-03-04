@@ -129,6 +129,7 @@ vision_agent = VisionAgent(
     device_manager=device_manager,
     gui_plus_client=gui_plus_client,
     safety_guard=safety_guard,
+    ocr_client=ocr_client,
 )
 
 # Data collection components
