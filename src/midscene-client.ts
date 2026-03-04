@@ -10,7 +10,7 @@
  * 默认端口: 9401 (MIDSCENE_SERVER_PORT)
  */
 
-import { AndroidAgent, AndroidDevice } from "@midscene/android";
+import { AndroidAgent, AndroidDevice, agentFromAdbDevice } from "@midscene/android";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,17 +53,18 @@ const config: MidsceneConfig = {
 async function ensureAgent(): Promise<AndroidAgent> {
   if (agent) return agent;
 
-  // AndroidDevice 需要 deviceId，空字符串表示使用默认设备
-  const deviceId = process.env.MIDSCENE_DEVICE_ID || "";
-  device = new AndroidDevice(deviceId);
-  await device.connect();
+  const deviceId = process.env.MIDSCENE_DEVICE_ID || undefined;
 
-  agent = new AndroidAgent(device, {
+  // agentFromAdbDevice 自动检测设备（deviceId 为空时用第一个连接的设备）
+  agent = await agentFromAdbDevice(deviceId, {
     aiActionContext:
       "这是一台 Android 手机，界面语言为中文。操作时优先识别中文文字。",
   });
 
-  console.log("[midscene] Agent connected to device:", deviceId || "(default)");
+  // 从 agent 中获取 device 引用用于 destroy
+  device = agent.page as AndroidDevice;
+
+  console.log("[midscene] Agent connected to device:", deviceId || "(auto-detected)");
   return agent;
 }
 
