@@ -9,6 +9,8 @@ export PATH="$ANDROID_HOME:$PATH"
 
 # 加载 .env 文件（Midscene 模型配置 + DashScope API Key）
 if [ -f "$PROJECT/.env" ]; then
+  # 修复 Windows 换行符
+  sed -i 's/\r$//' "$PROJECT/.env"
   set -a
   source "$PROJECT/.env"
   set +a
