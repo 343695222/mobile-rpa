@@ -11,6 +11,8 @@ sleep 1
 
 echo "=== 2. 启动 Midscene 服务 (:9401) ==="
 cd $PROJECT
+# 修复 Bun + source-map 兼容性 bug（column = -1 崩溃）
+sed -i 's/if (aNeedle\[aColumnName\] < 0)/if (aNeedle[aColumnName] < -1)/' node_modules/source-map/lib/source-map-consumer.js 2>/dev/null
 nohup bun run src/midscene-client.ts > midscene.log 2>&1 &
 echo "Midscene PID: $!"
 
