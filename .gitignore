@@ -7,3 +7,10 @@ __pycache__/
 .venv/
 dist/
 .env
+frpc.exe
+frps.exe
+frpc
+frp_*.zip
+frp_*.tar.gz
+frp_*_*/
+midscene_run/

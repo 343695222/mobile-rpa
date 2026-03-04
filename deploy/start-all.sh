@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================
 # 云端一键启动所有服务
-# Midscene 通过 frp 隧道连接手机 WiFi ADB
-# 不需要 USB、不需要 SSH 隧道、不需要本地电脑
+# Midscene 通过 frp 隧道从本地 PC 映射过来
+# 云端不启动 Midscene，只启动 frps + U2_Service
 # ============================================
 PROJECT=~/.openclaw/workspace/skills/mobile-rpa
 
@@ -39,13 +39,11 @@ nohup frps -c deploy/frps.toml > frps-run.log 2>&1 &
 echo "frps PID: $!"
 sleep 1
 
-# ── 2. Midscene 服务 ──
-echo "=== 2. 启动 Midscene 服务 (:9401) ==="
-cd $PROJECT
-sed -i 's/if (aNeedle\[aColumnName\] < 0)/if (aNeedle[aColumnName] < -1)/' node_modules/source-map/lib/source-map-consumer.js 2>/dev/null
-nohup bun run src/midscene-client.ts > midscene.log 2>&1 &
-echo "Midscene PID: $!"
-sleep 2
+# ── 2. Midscene 说明 ──
+echo "=== 2. Midscene 服务 (:9401) ==="
+echo "  ⚠ 云端不启动 Midscene，通过 frp 隧道使用本地 PC 的 Midscene"
+echo "  本地 PC 执行: ./frpc -c deploy/frpc-local.toml"
+echo ""
 
 # ── 3. U2_Service ──
 echo "=== 3. 启动 U2_Service (:9400) ==="
@@ -59,17 +57,14 @@ echo ""
 echo "=== 健康检查 ==="
 echo -n "U2_Service:  "; curl -s http://localhost:9400/health 2>/dev/null || echo "FAIL"
 echo ""
-echo -n "Midscene:    "; curl -s http://localhost:9401/health 2>/dev/null || echo "FAIL"
+echo -n "Midscene:    "; curl -s http://localhost:9401/health 2>/dev/null || echo "FAIL (等待本地 frpc 连接)"
 echo ""
 
 echo ""
-echo "=== 手机端操作 ==="
-echo "1. 手机开启 WiFi ADB:"
-echo "   设置 → 开发者选项 → 无线调试 → 开启"
-echo "   或在 Termux 执行: su -c 'setprop service.adb.tcp.port 5555; stop adbd; start adbd'"
+echo "=== 本地 PC 操作 ==="
+echo "1. 启动模拟器 (Android Studio)"
+echo "2. 启动 Midscene: bun run src/midscene-client.ts"
+echo "3. 启动 frp 隧道: ./frpc -c deploy/frpc-local.toml"
+echo "4. 连接设备: curl -X POST http://localhost:9401/connect (本地执行)"
 echo ""
-echo "2. 手机 Termux 启动 frp 客户端:"
-echo "   cd ~ && ./frpc -c frpc.toml"
-echo ""
-echo "3. 云端连接设备:"
-echo "   curl -X POST http://localhost:9401/connect"
+echo "隧道建立后，云端 U2_Service 自动通过 localhost:9401 调用本地 Midscene"

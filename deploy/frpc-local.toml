@@ -1,0 +1,26 @@
+# ============================================
+# frp 客户端配置 — 本地 PC 用
+# 运行位置：本地 Windows（你的开发机）
+# 用途：将本地 Midscene 服务 (9401) 映射到云端
+#       云端 U2_Service 通过 localhost:9401 调用
+# ============================================
+
+serverAddr = "101.32.242.14"
+serverPort = 7000
+auth.token = "openclaw-frp-2024"
+
+log.to = "./frpc-local.log"
+log.level = "info"
+log.maxDays = 3
+
+# ============================================
+# Midscene 服务隧道
+# 本地 9401 → 云端 9401
+# 云端 U2_Service 的 midscene_bridge 默认连 localhost:9401
+# ============================================
+[[proxies]]
+name = "midscene-service"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 9401
+remotePort = 9401

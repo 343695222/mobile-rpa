@@ -1,311 +1,255 @@
-# Mobile RPA Skill 部署指南
+# Mobile RPA 部署指南
 
-## 推荐：完整部署（含 Midscene AI）
+## 架构
 
-**新用户推荐使用完整部署方案**，包含 Midscene AI 自然语言操作能力。
-
-详见 [`deploy/DEPLOY.md`](deploy/DEPLOY.md) — 包含 U2_Service + Midscene + AutoX.js + frp 全部组件。
-
-### 简化部署（仅 AutoX.js）
-
-如果只需要 AutoX.js 直连模式，详见 [`deploy/DEPLOY-SIMPLE.md`](deploy/DEPLOY-SIMPLE.md)
-
-架构对比：
 ```
-完整架构: Agent → U2_Service(:9400) → Midscene(:9401) + GUI-Plus + ADB + AutoX
-简化架构: Agent → Python(:9400) → frp隧道 → AutoJS(手机:9500)
+云端 OpenClaw → U2_Service(:9400) → frp隧道 → 本地 Midscene(:9401) → 本地模拟器
 ```
 
----
-
-## ADB 模式部署（传统方式）
-
-以下是传统 ADB + uiautomator2 模式的部署说明，适用于需要 ADB 特定功能的场景。
+- 云端：U2_Service (Python FastAPI) + frps
+- 本地：Midscene 服务 (Bun) + frpc + Android 模拟器
 
 ## 环境信息
 
 | 项目 | 值 |
 |------|-----|
-| 云服务器 | 腾讯云 101.32.242.14 (OpenCloudOS 9) |
-| 本地电脑 | Windows |
-| 手机设备 | a394960e (PJZ110) |
-| 项目本地路径 | D:\abnjd |
-| 项目云端路径 | ~/.openclaw/workspace/skills/mobile-rpa |
-| ADB 云端路径 | /opt/adb |
+| 云服务器 | 101.32.242.14 (OpenCloudOS 9) |
+| 云端项目路径 | ~/.openclaw/workspace/skills/mobile-rpa |
+| 本地项目路径 | D:\abnjd |
+| 本地 ADB | D:\learning\Open-AutoGLM-main\platform-tools\adb.exe |
+| 模拟器 | Android Studio AVD (emulator-5554) |
+| Midscene 模型 | qwen3-vl-plus (DashScope) |
+
+## 端口一览
+
+| 服务 | 端口 | 位置 | 说明 |
+|------|------|------|------|
+| U2_Service | 9400 | 云端 | 主 API |
+| Midscene | 9401 | 本地 (frp映射到云端) | AI 操作 |
+| frps 控制 | 7000 | 云端 | frp 服务端 |
+| frp 管理面板 | 7500 | 云端 | admin/admin123 |
 
 ---
 
-## 一、首次部署（完整流程）
+## 一、首次部署
 
-### 1. 云服务器准备
-默认用户名：root
-
-登录密码：3,jyBg!Pc5%A2
-101.32.242.14
-#### 1.1 安装 ADB
+### 云端
 
 ```bash
-# OpenCloudOS 没有 android-tools 包，手动安装 Google platform-tools
-cd /tmp
-curl -O https://dl.google.com/android/repository/platform-tools-latest-linux.zip
-unzip platform-tools-latest-linux.zip
-mv platform-tools /opt/adb
-
-# 加入 PATH（写入 bashrc 永久生效）
-echo 'export PATH=/opt/adb:$PATH' >> ~/.bashrc
-source ~/.bashrc
-
-# 验证
-adb version
-```
-
-#### 1.2 安装 Bun
-
-```bash
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc
-bun --version
-```
-
-#### 1.3 修复 npm registry（腾讯云镜像不全）
-
-```bash
-echo 'registry=https://registry.npmjs.org/' > ~/.npmrc
-```
-
-### 2. 本地电脑准备
-
-#### 2.1 确保 ADB 版本最新
-
-从 https://developer.android.com/tools/releases/platform-tools 下载最新 platform-tools。
-本地和云端 ADB 版本必须一致，否则会出现 `protocol fault` 错误。
-
-#### 2.2 手机开启 USB 调试
-
-手机连接本地电脑 USB，开启开发者选项 > USB 调试。
-
-验证本地能看到手机：
-```cmd
-adb devices
-```
-
-### 3. 建立 SSH 反向隧道（ADB over SSH）
-
-在本地 Windows CMD/PowerShell 中执行：
-
-```cmd
-ssh -R 5037:127.0.0.1:5037 root@101.32.242.14
-```
-
-输入密码后保持窗口不关。这样云服务器上的 ADB 就能通过隧道访问本地手机。
-
-> **注意**：如果提示 `remote port forwarding failed for listen port 5037`，
-> 先在云服务器上杀掉已有的 adb server：
-> ```bash
-> adb kill-server
-> ```
-> 然后重新建立隧道。
-
-验证（在云服务器上）：
-```bash
-adb devices
-# 应该看到: a394960e    device
-```
-
-### 4. 首次拉取代码
-
-**首次部署（云端还没有代码）：**
-```bash
+# 1. 拉代码
 mkdir -p ~/.openclaw/workspace/skills
 cd ~/.openclaw/workspace/skills
 git clone https://github.com/343695222/mobile-rpa.git
-```
+cd mobile-rpa
 
-**已有代码（更新到最新）：**
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa
-git pull origin main
-```
-
-> `.env` 文件不在 git 中，首次部署需要手动创建：
-> ```bash
-> cp .env.example .env
-> nano .env  # 填入真实 API Key
-> ```
-
-### 5. 云端安装依赖
-
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa
+# 2. 装依赖
 bun install
-```
-
-### 6. 验证部署
-
-```bash
-# 测试设备列表
-echo '{"type": "list_devices"}' | bun run src/skill-cli.ts
-
-# 测试屏幕抓取
-echo '{"type": "get_screen", "deviceId": "a394960e"}' | bun run src/skill-cli.ts
-
-# 测试点击操作
-echo '{"type": "execute_action", "deviceId": "a394960e", "action": {"type": "tap", "x": 540, "y": 960}}' | bun run src/skill-cli.ts
-
-# 测试模板列表
-echo '{"type": "list_templates"}' | bun run src/skill-cli.ts
-```
-
----
-
-## 二、后续代码更新（Git）
-
-### 本地提交 + 推送
-
-在本地项目目录中：
-```cmd
-git add -A
-git commit -m "描述你的改动"
-git push origin main
-```
-
-### 云端拉取 + 重启
-
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa
-git pull origin main
-
-# 如果改了 package.json
-bun install
-
-# 如果改了 pyproject.toml
 cd u2-server && uv sync && cd ..
 
-# 重启服务
-bash deploy/stop-all.sh
+# 3. 配置 .env
+cp .env.example .env
+nano .env  # 填入 DashScope API Key
+
+# 4. 启动
 bash deploy/start-all.sh
 ```
 
-> `.env` 不在 git 中，`git pull` 不会覆盖云端的 API Key 配置。
-
----
-
-## 三、下次重新连接（关机/断开后恢复）
-
-每次电脑关机、手机断开、或 SSH 隧道断了之后，按以下步骤恢复：
-
-### 步骤 1：本地准备
-
-1. 手机 USB 连接本地电脑
-2. 确认手机 USB 调试已开启
-3. 本地打开 CMD，确认手机连上了：
-
-```cmd
-adb devices
-:: 应该看到: a394960e    device
-```
-
-### 步骤 2：建立 SSH 隧道
-
-本地 CMD 执行（这个窗口要一直开着）：
-
-```cmd
-ssh -R 5037:127.0.0.1:5037 root@101.32.242.14
-```
-
-输入密码：`3,jyBg!Pc5%A2`
-
-> 如果提示 `remote port forwarding failed for listen port 5037`，
-> 在云服务器上先执行 `adb kill-server`，然后退出 SSH，重新建立隧道。
-
-### 步骤 3：云端验证
-
-隧道建好后，在同一个 SSH 窗口里（或另开一个 SSH 窗口）：
+### 本地
 
 ```bash
-# 确认能看到手机
-adb devices
+# 1. 装依赖
+bun install
 
-# 进入项目目录
-cd ~/.openclaw/workspace/skills/mobile-rpa
+# 2. 下载 frpc
+# https://github.com/fatedier/frp/releases → windows_amd64.zip
+# 解压 frpc.exe 到项目根目录
 
-# 测试 skill
-echo '{"type": "list_devices"}' | bun run src/skill-cli.ts
+# 3. 启动模拟器 (Android Studio → Virtual Device Manager)
+
+# 4. 一键启动
+deploy\start-local-to-cloud.cmd
 ```
 
-看到手机 `a394960e` 就说明一切正常，可以开始使用了。
+---
 
-### 快速恢复清单（复制粘贴用）
+## 二、日常使用
 
-本地 CMD：
+每次使用只需要：
+
+### 本地（双击运行）
 ```cmd
-adb devices
-ssh -R 5037:127.0.0.1:5037 root@101.32.242.14
+deploy\start-local-to-cloud.cmd
 ```
+自动启动 Midscene + 连接模拟器 + frp 隧道。
 
-云端：
-```bash
-adb devices
-cd ~/.openclaw/workspace/skills/mobile-rpa
-echo '{"type": "list_devices"}' | bun run src/skill-cli.ts
-```
-
----
-
-## 四、日常使用流程
-
-每次使用 Skill 的完整步骤：
-
-```
-1. 手机 USB 连接本地电脑
-2. 本地打开 CMD，建立 SSH 隧道：
-   ssh -R 5037:127.0.0.1:5037 root@101.32.242.14
-3. 隧道窗口保持不关
-4. OpenClaw 通过 stdin/stdout 调用 skill：
-   echo '{"type": "..."}' | bun run src/skill-cli.ts
-```
-
----
-
-## 四、日常使用流程
-
-每次使用 Skill 的完整步骤：
-
-```
-1. 手机 USB 连接本地电脑
-2. 本地打开 CMD，建立 SSH 隧道：
-   ssh -R 5037:127.0.0.1:5037 root@101.32.242.14
-3. 隧道窗口保持不关
-4. OpenClaw 通过 stdin/stdout 调用 skill：
-   echo '{"type": "..."}' | bun run src/skill-cli.ts
-```
-
----
-
-## 五、常见问题
-
-### Q: `protocol fault (couldn't read status)` 错误
-本地和云端 ADB 版本不一致。两边都更新到最新版 platform-tools。
-
-### Q: `remote port forwarding failed for listen port 5037`
-云端已有 adb server 占用 5037 端口。先在云端执行 `adb kill-server`，再重新建立隧道。
-
-### Q: `bun install` 报 404 错误
-检查 `~/.npmrc` 是否指向官方源：
-```bash
-cat ~/.npmrc
-# 应该是: registry=https://registry.npmjs.org/
-```
-
-### Q: `Module not found` 错误
-确认当前目录是项目根目录：
+### 云端（如果服务停了）
 ```bash
 cd ~/.openclaw/workspace/skills/mobile-rpa
+bash deploy/start-all.sh
 ```
 
-### Q: 手机断开连接
-检查本地 USB 连接和 SSH 隧道窗口是否还在。重新插拔 USB，重建隧道。
+### 验证
+```bash
+# 云端执行
+curl http://localhost:9401/health
+curl -X POST http://localhost:9401/ai/query -H "Content-Type: application/json" -d '{"dataDemand": "屏幕上所有可见的文字"}'
+```
 
-cli_a92f8fcfab389cc8
+---
 
-TtblXrxHG5mmfEwLscr2kcxyQ8k1ahX2
+## 三、代码更新
+
+```bash
+# 本地
+git add -A && git commit -m "描述" && git push origin main
+
+# 云端
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+bun install          # 如果改了 package.json
+cd u2-server && uv sync && cd ..  # 如果改了 pyproject.toml
+bash deploy/start-all.sh
+```
+
+---
+
+## 四、常见问题
+
+| 问题 | 解决 |
+|------|------|
+| frpc 连不上云端 | 确认云端 frps 在跑：`ss -tlnp \| grep 7000` |
+| Midscene 报 No devices | 确认模拟器已启动：`adb devices` |
+| 云端 9401 被占用 | 杀掉云端 Midscene：`pkill -f midscene-client` |
+| source-map 报错 | 启动脚本已自动修复 |
+| 模型 404 | 检查 .env 中 MODEL_NAME=qwen3-vl-plus, FAMILY=qwen3-vl |
+
+这个脚本会自动：启动 Midscene → 连接模拟器 → 启动 frp 隧道
+
+### 云端
+
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+bash deploy/start-all.sh
+```
+
+启动 frps + U2_Service（不启动 Midscene，通过 frp 隧道用本地的）。
+
+### 验证
+
+云端执行：
+```bash
+# 检查隧道
+curl http://localhost:9401/health
+
+# 连接设备（首次）
+curl -X POST http://localhost:9401/connect
+
+# 测试 aiQuery
+curl -X POST http://localhost:9401/ai/query \
+  -H "Content-Type: application/json" \
+  -d '{"dataDemand": "屏幕上所有可见的文字"}'
+
+# 测试 aiAct
+curl -X POST http://localhost:9401/ai/act \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "点击Chrome图标"}'
+```
+
+---
+
+## 首次部署
+
+### 云端准备
+
+```bash
+# 安装 Bun
+curl -fsSL https://bun.sh/install | bash
+
+# 安装 uv (Python)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 修复 npm registry
+echo 'registry=https://registry.npmjs.org/' > ~/.npmrc
+
+# 拉取代码
+mkdir -p ~/.openclaw/workspace/skills
+cd ~/.openclaw/workspace/skills
+git clone https://github.com/343695222/mobile-rpa.git
+cd mobile-rpa
+
+# 安装依赖
+bun install
+cd u2-server && uv sync && cd ..
+
+# 配置环境变量
+cp .env.example .env
+nano .env  # 填入 DashScope API Key
+```
+
+### 本地准备
+
+1. 安装 Android Studio，创建模拟器 (AVD)
+2. 安装 Bun：https://bun.sh
+3. 下载 frpc：https://github.com/fatedier/frp/releases → `frp_x.x.x_windows_amd64.zip`
+4. 解压 `frpc.exe` 到项目根目录
+
+```cmd
+# 安装依赖
+bun install
+
+# 配置 .env（从 .env.example 复制，填入 API Key）
+copy .env.example .env
+```
+
+---
+
+## 代码更新流程
+
+```cmd
+:: 本地提交推送
+git add -A
+git commit -m "描述改动"
+git push origin main
+```
+
+```bash
+# 云端拉取重启
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+bash deploy/start-all.sh
+```
+
+---
+
+## 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `src/midscene-client.ts` | Midscene Android Agent HTTP 服务 |
+| `u2-server/server.py` | U2_Service FastAPI 主服务 |
+| `u2-server/midscene_bridge.py` | Python → Midscene HTTP 桥接 |
+| `u2-server/strategies/midscene_strategy.py` | Midscene aiQuery 数据采集策略 |
+| `deploy/start-all.sh` | 云端一键启动 (frps + U2_Service) |
+| `deploy/start-local-to-cloud.cmd` | 本地一键启动 (Midscene + frpc) |
+| `deploy/frps.toml` | frp 服务端配置 |
+| `deploy/frpc-local.toml` | frp 客户端配置（本地 PC 用） |
+| `.env` | 环境变量（API Key、模型配置） |
+
+---
+
+## 常见问题
+
+### frpc 连不上云端
+确认云端 frps 在运行：`ss -tlnp | grep 7000`
+
+### Midscene 连接设备失败
+确认模拟器已启动：`adb devices` 应看到 `emulator-5554`
+
+### 云端 9401 端口被占
+云端的 Midscene 进程没杀干净：`pkill -f "midscene-client"`
+
+### source-map bug
+本地启动脚本已自动修复。云端如需手动修复：
+```bash
+sed -i 's/if (aNeedle\[aColumnName\] < 0)/if (aNeedle[aColumnName] < -1)/' node_modules/source-map/lib/source-map-consumer.js
+```
