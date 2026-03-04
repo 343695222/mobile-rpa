@@ -6,10 +6,14 @@
   "main": "src/skill-cli.ts",
   "scripts": {
     "start": "bun run src/skill-cli.ts",
+    "midscene": "bun run src/midscene-client.ts",
     "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.3.9",
     "fast-check": "^3.22.0"
+  },
+  "dependencies": {
+    "@midscene/android": "^1.5.1"
   }
 }

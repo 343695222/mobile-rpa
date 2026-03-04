@@ -19,15 +19,17 @@ import logging
 from typing import Any
 
 from device import DeviceManager
+from midscene_bridge import MidsceneBridge
 from navigator import Navigator
 from script_store import ScriptStore
-from strategies import ApiStrategy, RpaCopyStrategy, RpaOcrStrategy
+from strategies import ApiStrategy, MidsceneStrategy, RpaCopyStrategy, RpaOcrStrategy
 from dashscope_client import DashScopeVLClient
 
 logger = logging.getLogger(__name__)
 
 # Valid strategy names in priority order
-STRATEGY_PRIORITY = ["api", "rpa_copy", "rpa_ocr"]
+# midscene 优先于 rpa_copy/rpa_ocr（更准确的结构化提取）
+STRATEGY_PRIORITY = ["api", "midscene", "rpa_copy", "rpa_ocr"]
 
 
 class DataCollector:
@@ -41,6 +43,7 @@ class DataCollector:
         navigator: Navigator,
         script_store: ScriptStore,
         vision_client: DashScopeVLClient,
+        midscene_bridge: MidsceneBridge | None = None,
     ) -> None:
         self.device_manager = device_manager
         self.navigator = navigator
@@ -50,6 +53,7 @@ class DataCollector:
         # Instantiate strategies with their required dependencies
         self._strategies: dict[str, Any] = {
             "api": ApiStrategy(),
+            "midscene": MidsceneStrategy(navigator, midscene_bridge or MidsceneBridge()),
             "rpa_copy": RpaCopyStrategy(device_manager, navigator),
             "rpa_ocr": RpaOcrStrategy(device_manager, navigator, vision_client),
         }

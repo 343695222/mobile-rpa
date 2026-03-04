@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from collector import DataCollector
 from device import DeviceError, DeviceManager
+from midscene_bridge import MidsceneBridge
 from navigator import Navigator
 from safety_guard import SafetyGuard
 from script_store import ScriptStore
@@ -84,6 +85,18 @@ class CollectRequest(BaseModel):
     force_strategy: str | None = None
 
 
+class MidsceneActRequest(BaseModel):
+    instruction: str
+
+
+class MidsceneQueryRequest(BaseModel):
+    data_demand: str
+
+
+class MidsceneAssertRequest(BaseModel):
+    assertion: str
+
+
 class ValidateRequest(BaseModel):
     device_id: str
 
@@ -134,26 +147,31 @@ vision_agent = VisionAgent(
 
 # Data collection components
 script_store = ScriptStore()
+midscene_bridge = MidsceneBridge()
 navigator = Navigator(
     device_manager=device_manager,
     vision_agent=vision_agent,
     script_store=script_store,
     safety_guard=safety_guard,
+    midscene_bridge=midscene_bridge,
 )
 data_collector = DataCollector(
     device_manager=device_manager,
     navigator=navigator,
     script_store=script_store,
     vision_client=vl_client,
+    midscene_bridge=midscene_bridge,
 )
 
 # Script validator
 from strategies.api_strategy import ApiStrategy
+from strategies.midscene_strategy import MidsceneStrategy
 from strategies.rpa_copy_strategy import RpaCopyStrategy
 from strategies.rpa_ocr_strategy import RpaOcrStrategy
 
 _strategies = {
     "api": ApiStrategy(),
+    "midscene": MidsceneStrategy(navigator=navigator, midscene=midscene_bridge),
     "rpa_copy": RpaCopyStrategy(device_manager=device_manager, navigator=navigator),
     "rpa_ocr": RpaOcrStrategy(
         device_manager=device_manager, navigator=navigator, vision_client=vl_client
@@ -551,6 +569,69 @@ async def safety_set_mode(req: SafetyModeRequest) -> ApiResponse:
 @app.get("/safety/mode")
 async def safety_get_mode() -> ApiResponse:
     return ApiResponse(success=True, message="OK", data={"mode": safety_guard.mode})
+
+
+# ---------------------------------------------------------------------------
+# Midscene AI endpoints (proxy to TypeScript Midscene service)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/midscene/health")
+async def midscene_health() -> ApiResponse:
+    result = await midscene_bridge.health()
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "Midscene service unavailable"))
+    return ApiResponse(success=True, message="Midscene service running", data=result)
+
+
+@app.post("/midscene/connect")
+async def midscene_connect() -> ApiResponse:
+    result = await midscene_bridge.connect()
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "Connect failed"))
+    return ApiResponse(success=True, message="Midscene connected")
+
+
+@app.post("/midscene/disconnect")
+async def midscene_disconnect() -> ApiResponse:
+    result = await midscene_bridge.disconnect()
+    return ApiResponse(success=True, message="Midscene disconnected")
+
+
+@app.post("/midscene/act")
+async def midscene_act(req: MidsceneActRequest) -> ApiResponse:
+    """Midscene aiAct — 自然语言驱动 GUI 操作。"""
+    result = await midscene_bridge.ai_act(req.instruction)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "aiAct failed"), data=result)
+    return ApiResponse(success=True, message="Action completed", data=result)
+
+
+@app.post("/midscene/query")
+async def midscene_query(req: MidsceneQueryRequest) -> ApiResponse:
+    """Midscene aiQuery — 结构化数据提取。"""
+    result = await midscene_bridge.ai_query(req.data_demand)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "aiQuery failed"), data=result)
+    return ApiResponse(success=True, message="Query completed", data=result)
+
+
+@app.post("/midscene/assert")
+async def midscene_assert(req: MidsceneAssertRequest) -> ApiResponse:
+    """Midscene aiAssert — 屏幕状态断言。"""
+    result = await midscene_bridge.ai_assert(req.assertion)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "aiAssert failed"), data=result)
+    return ApiResponse(success=True, message="Assertion completed", data=result)
+
+
+@app.get("/midscene/screenshot")
+async def midscene_screenshot() -> ApiResponse:
+    """通过 Midscene (Scrcpy) 获取快速截图。"""
+    result = await midscene_bridge.screenshot()
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("error", "Screenshot failed"), data=result)
+    return ApiResponse(success=True, message="OK", data=result.get("data"))
 
 
 # ---------------------------------------------------------------------------

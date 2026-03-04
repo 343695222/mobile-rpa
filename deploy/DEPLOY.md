@@ -1,6 +1,6 @@
 # OpenClaw 移动端自动化插件 — 部署指南
 
-> 本文档覆盖 **新增组件** 的部署：U2_Service（Python FastAPI）、AutoX.js、frp 隧道、数据采集器。
+> 本文档覆盖所有组件的部署：U2_Service（Python FastAPI）、Midscene 服务（Bun）、AutoX.js、frp 隧道、数据采集器。
 > 基础环境（ADB、Bun、SSH 隧道）请参考项目根目录的 [DEPLOY.md](../DEPLOY.md)。
 
 ---
@@ -16,25 +16,43 @@
 | 云端项目路径 | ~/.openclaw/workspace/skills/mobile-rpa |
 | ADB 云端路径 | /opt/adb |
 | DashScope API Key | (通过环境变量 DASHSCOPE_API_KEY 配置) |
-| 视觉模型 | GUI-Plus (gui-plus) + 通义千问 VL (qwen-vl-max) |
+| 视觉模型 | GUI-Plus + Qwen-VL-Max + Qwen3-VL (Midscene) |
 
 ### 端口一览
 
-| 服务 | 端口 | 运行位置 |
-|------|------|---------|
-| U2_Service (FastAPI) | 9400 | 云服务器 |
-| AutoX_Service | 9500 | 手机 |
-| AutoX_Service (frp 映射) | 9501 | 云服务器 localhost |
-| frp 控制通道 | 7000 | 云服务器 |
-| frp Web 管理面板 | 7500 | 云服务器 (admin/admin123) |
-| ADB SSH 隧道 | 5037 | 云服务器 (反向隧道) |
+| 服务 | 端口 | 运行位置 | 说明 |
+|------|------|---------|------|
+| U2_Service (FastAPI) | 9400 | 云服务器 | 主 API 服务，含 Midscene 代理端点 |
+| **Midscene 服务 (Bun)** | **9401** | **云服务器** | **Midscene Android Agent HTTP 服务** |
+| AutoX_Service | 9500 | 手机 | AutoX.js HTTP 服务 |
+| AutoX_Service (frp 映射) | 9501 | 云服务器 localhost | frp 映射 |
+| frp 控制通道 | 7000 | 云服务器 | frp 服务端 |
+| frp Web 管理面板 | 7500 | 云服务器 (admin/admin123) | frp 管理 |
+| ADB SSH 隧道 | 5037 | 云服务器 (反向隧道) | ADB 转发 |
+
+### 系统架构（新增 Midscene 层）
+
+```
+                          ┌─────────────────────────────────────────┐
+                          │              云服务器                     │
+                          │                                         │
+Agent ──→ U2_Service ─────┤  /midscene/* ──→ Midscene服务(:9401)    │
+          (:9400)         │                    │ Qwen3-VL (DashScope)│
+                          │                    │ Scrcpy 快速截图      │
+                          │                    ↓                     │
+                          │  /vision/*  ──→ GUI-Plus (DashScope)    │
+                          │                    │ 复杂多步任务 fallback │
+                          │                                         │
+                          │  ADB ──→ uiautomator2 ──→ 手机          │
+                          │  frp ──→ AutoX.js(:9500) ──→ 手机       │
+                          └─────────────────────────────────────────┘
+```
 
 ---
 
 ## 一、云服务器部署
 
 > 以下操作均在云服务器 (101.32.242.14) 上以 root 用户执行。
-> OpenCloudOS 9 基于 CentOS/RHEL，使用 `dnf` 包管理器。
 
 ### 1.1 安装 uv（Python 环境管理）
 
@@ -44,277 +62,85 @@ source ~/.bashrc
 uv --version
 ```
 
-### 1.2 安装 Python 依赖
+### 1.2 安装 Bun（Midscene 服务运行时）
 
 ```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+bun --version
+```
 
-# uv sync 会自动创建虚拟环境并安装 pyproject.toml 中的所有依赖
+### 1.3 修复 npm registry（腾讯云镜像不全）
+
+```bash
+echo 'registry=https://registry.npmjs.org/' > ~/.npmrc
+```
+
+### 1.4 拉取代码（Git）
+
+项目仓库：`https://github.com/343695222/mobile-rpa.git`
+
+**首次部署（云端还没有代码）：**
+```bash
+mkdir -p ~/.openclaw/workspace/skills
+cd ~/.openclaw/workspace/skills
+git clone https://github.com/343695222/mobile-rpa.git
+```
+
+**已有代码（更新到最新）：**
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+```
+
+> 不要上传 `node_modules`，云端会自己安装。
+
+### 1.5 安装所有依赖
+
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+
+# Bun 依赖（含 @midscene/android）
+bun install
+
+# Python 依赖
+cd u2-server
 uv sync
 ```
 
-依赖列表（来自 `u2-server/pyproject.toml`）：
-- fastapi>=0.115
-- uvicorn>=0.34
-- uiautomator2>=3
-- httpx>=0.28
-- pillow>=11
+### 1.6 配置环境变量
 
-### 1.3 启动 U2_Service
-
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
-
-# 前台运行（调试用）
-uv run uvicorn server:app --host 0.0.0.0 --port 9400
-
-# 后台运行（生产用）
-nohup uv run uvicorn server:app --host 0.0.0.0 --port 9400 > u2-server.log 2>&1 &
-```
-
-验证服务启动：
-```bash
-curl http://localhost:9400/health
-# 应返回: {"success":true,"message":"U2 Service is running","data":null}
-```
-
-### 1.4 安装并启动 frp 服务端
-
-```bash
-# 下载 frp（以 0.61.1 为例，根据实际最新版本调整）
-cd /tmp
-curl -LO https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_linux_amd64.tar.gz
-tar -xzf frp_0.61.1_linux_amd64.tar.gz
-cp frp_0.61.1_linux_amd64/frps /usr/local/bin/
-chmod +x /usr/local/bin/frps
-```
-
-使用项目中的配置文件启动：
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa
-
-# 前台运行（调试用）
-frps -c deploy/frps.toml
-
-# 后台运行（生产用）
-nohup frps -c deploy/frps.toml > frps-run.log 2>&1 &
-```
-
-frp 服务端配置（`deploy/frps.toml`）要点：
-- 控制端口：7000
-- 认证令牌：`openclaw-frp-2024`
-- Web 管理面板：http://101.32.242.14:7500 (admin/admin123)
-
-### 1.5 开放防火墙端口
-
-```bash
-# 如果使用 firewalld
-firewall-cmd --permanent --add-port=9400/tcp   # U2_Service
-firewall-cmd --permanent --add-port=7000/tcp   # frp 控制通道
-firewall-cmd --permanent --add-port=7500/tcp   # frp Web 面板
-firewall-cmd --permanent --add-port=9501/tcp   # frp 映射的 AutoX 端口
-firewall-cmd --reload
-```
-
-> 同时需要在腾讯云安全组中放行以上端口。
-
----
-
-## 二、手机端部署
-
-### 2.1 安装 AutoX.js APK
-
-1. 从 [AutoX.js GitHub Releases](https://github.com/kkevsekk1/AutoX/releases) 下载最新 APK
-2. 将 APK 传输到手机并安装
-3. 首次打开 AutoX.js，授予存储权限
-
-### 2.2 开启无障碍权限
-
-这是 AutoX.js 正常工作的**必要条件**：
-
-1. 打开手机 **设置** → **无障碍** (或 **辅助功能**)
-2. 找到 **AutoX.js** 并开启无障碍服务
-3. 确认弹窗中选择 **允许**
-
-> 部分手机品牌路径不同：
-> - OPPO/realme: 设置 → 其他设置 → 无障碍
-> - 小米: 设置 → 更多设置 → 无障碍
-> - 华为: 设置 → 辅助功能 → 无障碍
-
-### 2.3 运行 AutoX.js HTTP 服务
-
-1. 将 `autox/autox-server.js` 脚本传输到手机
-2. 在 AutoX.js 中打开并运行该脚本
-3. 脚本会在手机端启动 HTTP 服务，监听端口 9500
-
-### 2.4 安装 Termux 并配置 frp 客户端
-
-#### 安装 Termux
-
-从 [F-Droid](https://f-droid.org/packages/com.termux/) 下载安装 Termux（不要用 Play Store 版本）。
-
-#### 在 Termux 中安装 frp 客户端
-
-```bash
-# 下载 frp ARM64 版本（根据手机架构选择）
-cd ~
-curl -LO https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_linux_arm64.tar.gz
-tar -xzf frp_0.61.1_linux_arm64.tar.gz
-cp frp_0.61.1_linux_arm64/frpc ~/frpc
-chmod +x ~/frpc
-```
-
-#### 创建客户端配置文件
-
-将项目中的 `deploy/frpc.toml` 内容复制到手机 Termux 中：
-
-```bash
-cat > ~/frpc.toml << 'EOF'
-serverAddr = "101.32.242.14"
-serverPort = 7000
-auth.token = "openclaw-frp-2024"
-
-log.to = "./frpc.log"
-log.level = "info"
-log.maxDays = 3
-
-[[proxies]]
-name = "autox-http"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 9500
-remotePort = 9501
-EOF
-```
-
-#### 启动 frp 客户端
-
-```bash
-cd ~
-./frpc -c frpc.toml
-```
-
-> 保持 Termux 在前台运行，或使用 `nohup ./frpc -c frpc.toml &` 后台运行。
-
----
-
-## 三、uiautomator2 初始化
-
-uiautomator2 需要向手机推送 agent APK 才能工作。此步骤需要 ADB 连接已建立。
-
-### 前提条件
-
-- ADB SSH 隧道已建立（参考根目录 [DEPLOY.md](../DEPLOY.md)）
-- 云服务器上 `adb devices` 能看到手机 `a394960e`
-
-### 执行初始化
-
-```bash
-cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
-
-# 推送 uiautomator2 agent 到手机
-uv run python -m uiautomator2 init
-```
-
-此命令会：
-1. 向手机安装 `uiautomator2` 的 ATX agent APK
-2. 安装 `uiautomator2-server` APK
-3. 启动 atx-agent 守护进程
-
-验证初始化成功：
-```bash
-# 在 Python 中测试连接
-uv run python -c "
-import uiautomator2 as u2
-d = u2.connect('a394960e')
-print(d.info)
-"
-```
-
-应输出设备信息（屏幕分辨率、SDK 版本等）。
-
----
-
-## 四、健康检查
-
-部署完成后，逐一检查各组件状态：
-
-### 4.1 ADB 连接
-
-```bash
-adb devices
-# 预期: a394960e    device
-```
-
-### 4.2 U2_Service
-
-```bash
-curl http://localhost:9400/health
-# 预期: {"success":true,"message":"U2 Service is running","data":null}
-
-# 测试设备列表
-curl http://localhost:9400/devices
-# 预期: 返回包含 a394960e 的设备列表
-```
-
-### 4.3 uiautomator2 设备操作
-
-```bash
-# 测试截图
-curl -X POST http://localhost:9400/device/a394960e/screenshot
-# 预期: {"success":true,"message":"Screenshot captured","data":"<base64>..."}
-```
-
-### 4.4 frp 隧道
-
-```bash
-# 检查 frp 服务端状态
-curl http://localhost:7500/api/proxy/tcp -u admin:admin123
-# 预期: 返回包含 autox-http 代理的 JSON
-
-# 或直接测试 AutoX 服务连通性
-curl http://localhost:9501/health
-# 预期: AutoX.js 服务返回健康状态
-```
-
-### 4.5 AutoX_Service（通过 frp）
-
-```bash
-curl -X POST http://localhost:9501/ocr
-# 预期: 返回 OCR 识别结果
-```
-
-### 4.6 Bun 入口层
+`.env` 文件不会被 git 提交（已在 `.gitignore` 中排除），需要手动创建：
 
 ```bash
 cd ~/.openclaw/workspace/skills/mobile-rpa
 
-# 测试设备列表（走 U2_Service）
-echo '{"type": "list_devices"}' | bun run src/skill-cli.ts
+# 从模板复制
+cp .env.example .env
 
-# 测试数据采集
-echo '{"type": "collect_data", "deviceId": "a394960e", "app": "微信", "dataType": "联系人"}' | bun run src/skill-cli.ts
-
-# 测试 AutoX 执行
-echo '{"type": "autox_execute", "action": "ocr"}' | bun run src/skill-cli.ts
+# 编辑，填入真实 API Key
+nano .env
 ```
 
-### 4.7 DashScope 视觉分析
+**必须修改的项：**
 
 ```bash
-curl -X POST http://localhost:9400/vision/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"device_id": "a394960e", "prompt": "请描述屏幕上的内容"}'
-# 预期: 返回 DashScope VL 模型对当前屏幕的分析结果
+# 把 ${DASHSCOPE_API_KEY} 替换为你的真实 Key
+MIDSCENE_MODEL_API_KEY=sk-你的真实key
+MIDSCENE_PLANNING_MODEL_API_KEY=sk-你的真实key
+MIDSCENE_INSIGHT_MODEL_API_KEY=sk-你的真实key
+
+# 同时设置系统环境变量（U2_Service 的 GUI-Plus/OCR 也需要）
+export DASHSCOPE_API_KEY=sk-你的真实key
 ```
+
+> 建议把 `export DASHSCOPE_API_KEY=sk-xxx` 写入 `~/.bashrc` 永久生效。
 
 ---
 
-## 五、日常启动顺序
+## 二、启动服务
 
-每次服务器重启或服务中断后，按以下顺序恢复所有组件：
-
-### 步骤 1：建立 ADB SSH 隧道
+### 2.1 建立 ADB SSH 隧道
 
 在本地 Windows CMD 中执行（窗口保持不关）：
 
@@ -332,128 +158,298 @@ adb devices
 # 应看到: a394960e    device
 ```
 
-### 步骤 2：启动 frp 服务端（云服务器）
+### 2.2 启动 frp 服务端
 
 ```bash
 cd ~/.openclaw/workspace/skills/mobile-rpa
 nohup frps -c deploy/frps.toml > frps-run.log 2>&1 &
 ```
 
-### 步骤 3：启动 U2_Service（云服务器）
+### 2.3 启动 Midscene 服务（新增）
+
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+
+# 前台运行（调试用，能看到日志）
+bun run src/midscene-client.ts
+
+# 后台运行（生产用）
+nohup bun run src/midscene-client.ts > midscene.log 2>&1 &
+```
+
+启动成功会看到：
+```
+[midscene] Agent connected to device: (default)
+[midscene] HTTP server listening on http://localhost:9401
+```
+
+> Midscene 服务首次连接设备时会自动通过 Scrcpy 建立视频流，可能需要几秒。
+
+### 2.4 启动 U2_Service
 
 ```bash
 cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
+
+# 前台运行（调试用）
+uv run uvicorn server:app --host 0.0.0.0 --port 9400
+
+# 后台运行（生产用）
 nohup uv run uvicorn server:app --host 0.0.0.0 --port 9400 > u2-server.log 2>&1 &
 ```
 
-### 步骤 4：手机端启动 AutoX.js 服务
+### 2.5 手机端启动 AutoX.js + frp
 
-1. 打开 AutoX.js App
-2. 确认无障碍权限已开启
-3. 运行 `autox-server.js` 脚本
-
-### 步骤 5：手机端启动 frp 客户端
-
-在 Termux 中执行：
+1. 打开 AutoX.js App → 确认无障碍权限已开启 → 运行 `autox-server-v2.js`
+2. 在 Termux 中启动 frp 客户端：
 ```bash
-cd ~
-./frpc -c frpc.toml
+cd ~ && ./frpc -c frpc.toml
 ```
 
-### 步骤 6：验证所有服务
+---
+
+## 三、健康检查
+
+部署完成后，逐一检查各组件：
 
 ```bash
-# 在云服务器上依次检查
-curl http://localhost:9400/health          # U2_Service
-curl http://localhost:9501/health          # AutoX (via frp)
-adb devices                                # ADB 连接
+# 1. ADB 连接
+adb devices
+# 预期: a394960e    device
 
-cd ~/.openclaw/workspace/skills/mobile-rpa
-echo '{"type": "list_devices"}' | bun run src/skill-cli.ts
+# 2. Midscene 服务（新增）
+curl http://localhost:9401/health
+# 预期: {"success":true,"message":"Midscene service running","connected":true}
+
+# 3. U2_Service
+curl http://localhost:9400/health
+# 预期: {"success":true,"message":"U2 Service is running","data":null}
+
+# 4. Midscene 通过 U2_Service 代理
+curl http://localhost:9400/midscene/health
+# 预期: {"success":true,"message":"Midscene service running",...}
+
+# 5. frp + AutoX
+curl http://localhost:9501/health
+# 预期: AutoX.js 健康状态
+
+# 6. DashScope 视觉分析
+curl -X POST http://localhost:9400/vision/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": "a394960e", "prompt": "请描述屏幕上的内容"}'
 ```
 
-### 快速启动脚本（云服务器端）
+### 测试 Midscene AI 能力
 
-可将以下内容保存为 `deploy/start-all.sh`：
+```bash
+# 测试 aiAct（自然语言操作）
+curl -X POST http://localhost:9400/midscene/act \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "点击屏幕上的设置图标"}'
+
+# 测试 aiQuery（结构化数据提取）
+curl -X POST http://localhost:9400/midscene/query \
+  -H "Content-Type: application/json" \
+  -d '{"data_demand": "屏幕上所有可见的应用名称"}'
+
+# 测试 aiAssert（屏幕断言）
+curl -X POST http://localhost:9400/midscene/assert \
+  -H "Content-Type: application/json" \
+  -d '{"assertion": "当前在手机桌面"}'
+
+# 测试 Midscene 快速截图（Scrcpy）
+curl http://localhost:9400/midscene/screenshot
+```
+
+---
+
+## 四、日常启动顺序（完整）
+
+每次服务器重启或服务中断后，按以下顺序恢复：
+
+```
+步骤 1: 本地 → 建立 ADB SSH 隧道
+步骤 2: 云端 → 启动 frp 服务端
+步骤 3: 云端 → 启动 Midscene 服务 ← 新增
+步骤 4: 云端 → 启动 U2_Service
+步骤 5: 手机 → 启动 AutoX.js 服务
+步骤 6: 手机 → 启动 frp 客户端
+步骤 7: 云端 → 健康检查
+```
+
+### 一键启动脚本（云服务器端）
 
 ```bash
 #!/bin/bash
-echo "=== 启动 frp 服务端 ==="
-cd ~/.openclaw/workspace/skills/mobile-rpa
+# deploy/start-all.sh
+PROJECT=~/.openclaw/workspace/skills/mobile-rpa
+
+echo "=== 1. 启动 frp 服务端 ==="
+cd $PROJECT
 nohup frps -c deploy/frps.toml > frps-run.log 2>&1 &
 echo "frps PID: $!"
 
-echo "=== 启动 U2_Service ==="
-cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
+echo "=== 2. 启动 Midscene 服务 ==="
+cd $PROJECT
+nohup bun run src/midscene-client.ts > midscene.log 2>&1 &
+echo "Midscene PID: $!"
+
+echo "=== 3. 启动 U2_Service ==="
+cd $PROJECT/u2-server
 nohup uv run uvicorn server:app --host 0.0.0.0 --port 9400 > u2-server.log 2>&1 &
 echo "U2_Service PID: $!"
 
-sleep 2
-echo "=== 健康检查 ==="
-curl -s http://localhost:9400/health
+sleep 3
 echo ""
-echo "=== 等待手机端 frp 客户端连接... ==="
-echo "请在手机 Termux 中执行: ./frpc -c frpc.toml"
+echo "=== 健康检查 ==="
+echo -n "U2_Service: "; curl -s http://localhost:9400/health | head -c 60; echo
+echo -n "Midscene:   "; curl -s http://localhost:9401/health | head -c 60; echo
+echo ""
+echo "=== 等待手机端连接 ==="
+echo "1. 手机运行 AutoX.js 服务脚本"
+echo "2. Termux 执行: ./frpc -c frpc.toml"
+```
+
+### 一键停止脚本
+
+```bash
+#!/bin/bash
+# deploy/stop-all.sh
+echo "=== 停止所有服务 ==="
+pkill -f "uvicorn server:app" && echo "U2_Service stopped" || echo "U2_Service not running"
+pkill -f "midscene-client" && echo "Midscene stopped" || echo "Midscene not running"
+pkill -f "frps" && echo "frps stopped" || echo "frps not running"
+echo "=== 完成 ==="
 ```
 
 ---
 
-## 六、三种设备访问方式共存
+## 五、代码更新流程
 
-部署完成后，系统支持三种并行的设备访问方式：
+### 本地提交 + 推送
 
-| 方式 | 通道 | 适用场景 |
-|------|------|---------|
-| ADB SSH 隧道 | 本地 USB → SSH 反向隧道 → 云服务器 adb | 基础 shell 命令、文件传输 |
-| uiautomator2 | ADB 隧道 → u2 agent (手机) → U2_Service (云) | 高速截图、元素操作、中文输入 |
-| AutoX.js | 手机 HTTP 9500 → frp 隧道 → 云服务器 9501 | 无障碍服务、OCR、自定义 JS 脚本 |
+在本地 Windows 项目目录中：
+```cmd
+git add -A
+git commit -m "描述你的改动"
+git push origin main
+```
 
-Bun 入口层 (`skill-cli.ts`) 会自动路由：
-- 设备操作指令 → 优先 U2_Service，不可用时回退 ADB
-- AutoX 指令 → frp 映射端口 (9501)
-- 数据采集指令 → U2_Service 的 DataCollector
+### 云端拉取
+
+SSH 到云服务器后：
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+```
+
+### 更新后重启
+
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+
+# 如果改了 package.json（新增 npm 依赖）
+bun install
+
+# 如果改了 pyproject.toml（新增 Python 依赖）
+cd u2-server && uv sync && cd ..
+
+# 重启服务
+bash deploy/stop-all.sh
+bash deploy/start-all.sh
+```
+
+> `.env` 文件不在 git 中，`git pull` 不会覆盖云端的 `.env`，API Key 安全。
 
 ---
 
-## 七、常见问题
+## 六、四种设备访问方式共存
+
+| 方式 | 通道 | 适用场景 |
+|------|------|---------|
+| **Midscene (Scrcpy)** | **ADB → Scrcpy 视频流 → Qwen3-VL** | **自然语言操作、结构化数据提取、快速截图** |
+| ADB SSH 隧道 | 本地 USB → SSH 反向隧道 → 云服务器 adb | 基础 shell 命令、文件传输 |
+| uiautomator2 | ADB 隧道 → u2 agent → U2_Service | 元素操作、中文输入 |
+| AutoX.js | 手机 HTTP 9500 → frp → 云服务器 9501 | 无障碍服务、手机端 JS 脚本 |
+
+### 数据采集策略优先级（更新）
+
+```
+api > midscene > rpa_copy > rpa_ocr
+```
+
+- `midscene`：通过 Midscene aiQuery 直接提取结构化数据（推荐）
+- `rpa_ocr`：传统截图 + GLM OCR + JSON 解析（fallback）
+
+---
+
+## 七、Midscene 模型配置说明
+
+Midscene 使用三个独立的模型 intent，都通过 DashScope API 调用 Qwen3-VL：
+
+| Intent | 用途 | 环境变量前缀 |
+|--------|------|-------------|
+| Default | 元素定位 (Locate) | `MIDSCENE_MODEL_*` |
+| Planning | 多步操作规划 (aiAct) | `MIDSCENE_PLANNING_MODEL_*` |
+| Insight | 数据提取 (aiQuery) + 断言 (aiAssert) | `MIDSCENE_INSIGHT_MODEL_*` |
+
+所有配置在 `.env` 文件中，关键字段：
+
+```bash
+MIDSCENE_MODEL_NAME=qwen3-vl              # 模型名
+MIDSCENE_MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  # DashScope OpenAI 兼容端点
+MIDSCENE_MODEL_API_KEY=sk-xxx             # DashScope API Key
+MIDSCENE_MODEL_FAMILY=qwen3-vl            # 模型族（影响 prompt 格式和坐标系）
+MIDSCENE_PREFERRED_LANGUAGE=zh            # 中文优先
+```
+
+> GUI-Plus 模型保留在 VisionAgent 中作为复杂多步任务的 fallback，通过 `DASHSCOPE_API_KEY` 环境变量配置。
+
+---
+
+## 八、常见问题
+
+### Q: Midscene 服务启动报 `Cannot find module '@midscene/android'`
+
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+bun install
+```
+
+### Q: Midscene 连接设备失败
+
+确保 ADB 隧道已建立且 `adb devices` 能看到手机。Midscene 通过 ADB 连接设备。
+
+### Q: Midscene aiAct 超时
+
+Qwen3-VL 模型调用可能需要 10-30 秒。可以在 `.env` 中调整超时：
+```bash
+MIDSCENE_MODEL_TIMEOUT=60000
+```
 
 ### Q: `uv sync` 报错找不到 Python
 
 ```bash
-# 安装 Python 3.10+（OpenCloudOS 9）
 dnf install -y python3.11
-# uv 会自动检测系统 Python
 ```
 
 ### Q: `uiautomator2 init` 失败
 
-确保 ADB 隧道已建立且 `adb devices` 能看到手机。如果手机弹出安装确认，请在手机上点击允许。
+确保 ADB 隧道已建立且 `adb devices` 能看到手机。
 
 ### Q: frp 客户端连不上服务端
 
 1. 检查云服务器防火墙是否放行 7000 端口
 2. 检查腾讯云安全组是否放行 7000 端口
 3. 确认 `auth.token` 两端一致：`openclaw-frp-2024`
-4. 查看 frp 日志：`cat frpc.log`
-
-### Q: AutoX.js 无障碍权限被系统关闭
-
-部分手机系统会在后台自动关闭无障碍权限。解决方法：
-- 将 AutoX.js 加入电池优化白名单
-- 锁定 AutoX.js 后台（在最近任务中锁定）
-- 部分品牌需要在"自启动管理"中允许 AutoX.js
 
 ### Q: U2_Service 报 `Device not connected`
 
 ```bash
-# 检查 ADB 连接
 adb devices
-
-# 重新初始化 uiautomator2
 cd ~/.openclaw/workspace/skills/mobile-rpa/u2-server
 uv run python -m uiautomator2 init
 ```
 
 ### Q: 云服务器重启后所有服务都停了
 
-按照"五、日常启动顺序"重新启动所有服务。建议将 `deploy/start-all.sh` 加入 systemd 或 crontab 实现开机自启。
+按照"四、日常启动顺序"重新启动，或执行 `bash deploy/start-all.sh`。

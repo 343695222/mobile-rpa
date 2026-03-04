@@ -1,15 +1,19 @@
 # Mobile RPA Skill 部署指南
 
-## 推荐：AutoJS 直连模式
+## 推荐：完整部署（含 Midscene AI）
 
-**新用户推荐使用 AutoJS 直连模式**，配置更简单、延迟更低。
+**新用户推荐使用完整部署方案**，包含 Midscene AI 自然语言操作能力。
 
-详见 [`deploy/DEPLOY-SIMPLE.md`](deploy/DEPLOY-SIMPLE.md)
+详见 [`deploy/DEPLOY.md`](deploy/DEPLOY.md) — 包含 U2_Service + Midscene + AutoX.js + frp 全部组件。
+
+### 简化部署（仅 AutoX.js）
+
+如果只需要 AutoX.js 直连模式，详见 [`deploy/DEPLOY-SIMPLE.md`](deploy/DEPLOY-SIMPLE.md)
 
 架构对比：
 ```
-旧架构（ADB）: Agent → Python → ADB SSH隧道 → uiautomator2 → 手机
-新架构（AutoJS）: Agent → Python → frp隧道 → AutoJS (手机:9500)
+完整架构: Agent → U2_Service(:9400) → Midscene(:9401) + GUI-Plus + ADB + AutoX
+简化架构: Agent → Python(:9400) → frp隧道 → AutoJS(手机:9500)
 ```
 
 ---
@@ -108,18 +112,25 @@ adb devices
 # 应该看到: a394960e    device
 ```
 
-### 4. 首次上传代码
+### 4. 首次拉取代码
 
-在本地项目目录（D:\abnjd）打开 CMD：
-
-```cmd
-scp -r src templates tests package.json tsconfig.json SKILL.md root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/
+**首次部署（云端还没有代码）：**
+```bash
+mkdir -p ~/.openclaw/workspace/skills
+cd ~/.openclaw/workspace/skills
+git clone https://github.com/343695222/mobile-rpa.git
 ```
 
-> **说明**：不要上传 `node_modules`，云端会自己安装。
-> 如果云端目录不存在，先 SSH 登录创建：
+**已有代码（更新到最新）：**
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+```
+
+> `.env` 文件不在 git 中，首次部署需要手动创建：
 > ```bash
-> mkdir -p ~/.openclaw/workspace/skills/mobile-rpa
+> cp .env.example .env
+> nano .env  # 填入真实 API Key
 > ```
 
 ### 5. 云端安装依赖
@@ -147,55 +158,35 @@ echo '{"type": "list_templates"}' | bun run src/skill-cli.ts
 
 ---
 
-## 二、后续代码更新
+## 二、后续代码更新（Git）
 
-### 方式 A：上传单个修改的文件
+### 本地提交 + 推送
 
-当你只改了一两个文件时，直接 scp 单个文件：
-
+在本地项目目录中：
 ```cmd
-:: 示例：只改了 adb-client.ts
-scp src/adb-client.ts root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/src/
-
-:: 示例：改了多个 src 文件
-scp src/adb-client.ts src/screen-parser.ts root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/src/
-
-:: 示例：改了模板文件
-scp templates/open-app.json root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/templates/
+git add -A
+git commit -m "描述你的改动"
+git push origin main
 ```
 
-### 方式 B：上传整个目录（大量修改时）
+### 云端拉取 + 重启
 
-```cmd
-:: 上传所有源码（排除 node_modules）
-scp -r src templates tests package.json tsconfig.json SKILL.md root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/
+```bash
+cd ~/.openclaw/workspace/skills/mobile-rpa
+git pull origin main
+
+# 如果改了 package.json
+bun install
+
+# 如果改了 pyproject.toml
+cd u2-server && uv sync && cd ..
+
+# 重启服务
+bash deploy/stop-all.sh
+bash deploy/start-all.sh
 ```
 
-### 方式 C：如果改了 package.json（新增依赖）
-
-```cmd
-:: 本地上传 package.json
-scp package.json root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/
-
-:: 云端重新安装依赖
-ssh root@101.32.242.14 "cd ~/.openclaw/workspace/skills/mobile-rpa && bun install"
-```
-
-### 快捷一键更新脚本
-
-在本地项目根目录创建 `deploy.bat`：
-
-```bat
-@echo off
-echo === 上传代码到云服务器 ===
-scp -r src templates tests package.json tsconfig.json SKILL.md root@101.32.242.14:~/.openclaw/workspace/skills/mobile-rpa/
-echo === 上传完成 ===
-echo.
-echo 如果改了 package.json，请在云端执行：
-echo   cd ~/.openclaw/workspace/skills/mobile-rpa ^&^& bun install
-```
-
-双击 `deploy.bat` 即可一键上传。
+> `.env` 不在 git 中，`git pull` 不会覆盖云端的 API Key 配置。
 
 ---
 

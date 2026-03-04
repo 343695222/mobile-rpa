@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from device import DeviceManager
+from midscene_bridge import MidsceneBridge
 from safety_guard import SafetyGuard
 from script_store import ScriptStore
 from vision_agent import VisionAgent
@@ -22,7 +23,7 @@ STEP_DELAY = 0.5
 
 
 class Navigator:
-    """导航管理器：脚本优先，探索回退，自动学习。"""
+    """导航管理器：脚本优先，探索回退，自动学习。支持 Midscene aiAct 导航。"""
 
     def __init__(
         self,
@@ -30,11 +31,13 @@ class Navigator:
         vision_agent: VisionAgent,
         script_store: ScriptStore,
         safety_guard: SafetyGuard | None = None,
+        midscene_bridge: MidsceneBridge | None = None,
     ) -> None:
         self.device_manager = device_manager
         self.vision_agent = vision_agent
         self.script_store = script_store
         self.safety_guard = safety_guard or SafetyGuard()
+        self.midscene = midscene_bridge
 
     async def navigate_to(
         self, device_id: str, app: str, target_page: str
@@ -76,17 +79,39 @@ class Navigator:
     async def explore(
         self, device_id: str, app: str, target: str
     ) -> dict[str, Any]:
-        """通过 VisionAgent 自主探索到达目标页面。
+        """通过 Midscene aiAct 或 VisionAgent 自主探索到达目标页面。
+
+        优先尝试 Midscene（更快、更准），失败回退到 GUI-Plus VisionAgent。
 
         Returns:
             {"success": bool, "steps": [...], "error"?: str}
         """
+        # 先启动目标 App
         try:
-            # 先启动目标 App
             self.device_manager.app_start(device_id, app)
-            await asyncio.sleep(1.0)  # 等待 App 启动
+            await asyncio.sleep(1.0)
+        except Exception as exc:
+            logger.error("Failed to start app %s: %s", app, exc)
 
-            # 用 VisionAgent 探索
+        # 1. 尝试 Midscene aiAct（如果可用）
+        if self.midscene:
+            try:
+                health = await self.midscene.health()
+                if health.get("success"):
+                    instruction = f"导航到{app}的{target}页面"
+                    result = await self.midscene.ai_act(instruction)
+                    if result.get("success"):
+                        logger.info("Midscene aiAct navigation succeeded for %s/%s", app, target)
+                        return {
+                            "success": True,
+                            "steps": [{"action": {"type": "midscene_act"}, "description": instruction}],
+                        }
+                    logger.warning("Midscene aiAct failed: %s, falling back to VisionAgent", result.get("error", ""))
+            except Exception as exc:
+                logger.warning("Midscene unavailable: %s, falling back to VisionAgent", exc)
+
+        # 2. 回退到 GUI-Plus VisionAgent
+        try:
             goal = f"到达{app}的{target}页面"
             result = await self.vision_agent.run_task(device_id, goal)
 
