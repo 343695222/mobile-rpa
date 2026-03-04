@@ -31,3 +31,15 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = 9500
 remotePort = 9501
+
+# ============================================
+# WiFi ADB 隧道
+# 将手机本地 5555 端口（WiFi ADB）映射到云服务器 5556 端口
+# Midscene 通过 remoteAdbHost=127.0.0.1:5556 连接
+# ============================================
+[[proxies]]
+name = "wifi-adb"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5555
+remotePort = 5556

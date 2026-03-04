@@ -19,8 +19,8 @@ import { AndroidAgent, AndroidDevice, agentFromAdbDevice } from "@midscene/andro
 interface MidsceneConfig {
   port: number;
   adbPath?: string;
-  remoteHost?: string;
-  remotePort?: number;
+  remoteAdbHost?: string;
+  remoteAdbPort?: number;
 }
 
 interface TaskResult {
@@ -40,8 +40,8 @@ let agent: AndroidAgent | null = null;
 const config: MidsceneConfig = {
   port: parseInt(process.env.MIDSCENE_SERVER_PORT || "9401", 10),
   adbPath: process.env.MIDSCENE_ADB_PATH,
-  remoteHost: process.env.MIDSCENE_ADB_REMOTE_HOST,
-  remotePort: process.env.MIDSCENE_ADB_REMOTE_PORT
+  remoteAdbHost: process.env.MIDSCENE_ADB_REMOTE_HOST,
+  remoteAdbPort: process.env.MIDSCENE_ADB_REMOTE_PORT
     ? parseInt(process.env.MIDSCENE_ADB_REMOTE_PORT, 10)
     : undefined,
 };
@@ -55,15 +55,41 @@ async function ensureAgent(): Promise<AndroidAgent> {
 
   const deviceId = process.env.MIDSCENE_DEVICE_ID || undefined;
 
-  // agentFromAdbDevice 自动检测设备（deviceId 为空时用第一个连接的设备）
+  // 如果配置了远程 ADB（WiFi ADB via frp），使用 AndroidDevice 直连
+  if (config.remoteAdbHost) {
+    console.log(
+      `[midscene] Connecting via remote ADB: ${config.remoteAdbHost}:${config.remoteAdbPort || 5037}`
+    );
+
+    // 远程 ADB 模式：通过 frp 隧道连接手机的 WiFi ADB
+    // deviceId 格式为 host:port（如 127.0.0.1:5556）
+    const remoteDeviceId =
+      deviceId || `${config.remoteAdbHost}:${config.remoteAdbPort || 5556}`;
+
+    device = new AndroidDevice(remoteDeviceId, {
+      androidAdbPath: config.adbPath,
+      remoteAdbHost: config.remoteAdbHost,
+      remoteAdbPort: config.remoteAdbPort,
+    });
+
+    await device.connect();
+
+    agent = new AndroidAgent(device, {
+      aiActionContext:
+        "这是一台 Android 手机，界面语言为中文。操作时优先识别中文文字。",
+    });
+
+    console.log("[midscene] Agent connected via remote ADB:", remoteDeviceId);
+    return agent;
+  }
+
+  // 本地 ADB 模式（USB 直连）
   agent = await agentFromAdbDevice(deviceId, {
     aiActionContext:
       "这是一台 Android 手机，界面语言为中文。操作时优先识别中文文字。",
   });
 
-  // 从 agent 中获取 device 引用用于 destroy
   device = agent.page as AndroidDevice;
-
   console.log("[midscene] Agent connected to device:", deviceId || "(auto-detected)");
   return agent;
 }
