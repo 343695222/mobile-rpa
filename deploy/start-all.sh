@@ -25,8 +25,8 @@ echo "=== 0. 清理残留进程 ==="
 pkill -f "uvicorn server:app" 2>/dev/null
 pkill -f "midscene-client" 2>/dev/null
 pkill -f "frps" 2>/dev/null
-# 杀掉云端 adb server，避免和 SSH 隧道冲突
-$ANDROID_HOME/adb kill-server 2>/dev/null
+# 杀掉云端 adb server 进程，避免和 SSH 隧道冲突（不用 adb kill-server，那会重新启动）
+fuser -k 5037/tcp 2>/dev/null
 sleep 1
 
 echo ""
@@ -65,16 +65,16 @@ echo ""
 echo -n "Midscene:    "; curl -s http://localhost:9401/health 2>/dev/null || echo "FAIL"
 echo ""
 
-# ── ADB 设备检查 ──
-echo ""
-echo "=== ADB 设备 ==="
-$ANDROID_HOME/adb devices 2>/dev/null || echo "⚠ ADB 不可用（等待 SSH 隧道）"
+# 注意：不要在云端运行 adb devices！它会自动启动本地 adb server 抢占 5037 端口，
+# 导致 SSH 隧道失效。设备连接通过 Midscene /connect 端点验证。
 
 echo ""
-echo "=== 等待手机端连接 ==="
-echo "1. 本地 Windows 执行: adb kill-server && adb devices"
-echo "2. 本地 Windows 执行: ssh -R 9501:127.0.0.1:9500 -R 5037:127.0.0.1:5037 root@101.32.242.14"
-echo "3. 手机运行 AutoX.js 服务脚本"
-echo "4. 手机 Termux 执行: ./frpc -c frpc.toml"
+echo "=== 下一步 ==="
+echo "1. 本地 Windows: adb kill-server && adb start-server && adb devices"
+echo "2. 本地 Windows: ssh -R 5037:127.0.0.1:5037 root@101.32.242.14"
+echo "   (如果 5037 被占用，先在云端执行: kill \$(fuser 5037/tcp 2>/dev/null | head -1))"
+echo "3. 云端验证: curl -X POST http://localhost:9401/connect"
+echo "4. 手机运行 AutoX.js 服务脚本"
+echo "5. 手机 Termux 执行: ./frpc -c frpc.toml"
 echo ""
-echo "隧道建立后，执行: curl -X POST http://localhost:9401/connect"
+echo "⚠ 切勿在云端运行 adb devices，会抢占 SSH 隧道端口！"
