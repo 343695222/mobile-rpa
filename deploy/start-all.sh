@@ -2,6 +2,36 @@
 # 一键启动所有云端服务
 PROJECT=~/.openclaw/workspace/skills/mobile-rpa
 
+# ── 环境变量（确保子进程能继承）──
+export ANDROID_HOME=/opt/adb
+export MIDSCENE_ADB_PATH=/opt/adb/adb
+export PATH="$ANDROID_HOME:$PATH"
+
+# 加载 .env 文件（Midscene 模型配置 + DashScope API Key）
+if [ -f "$PROJECT/.env" ]; then
+  set -a
+  source "$PROJECT/.env"
+  set +a
+  echo "✓ 已加载 .env 配置"
+else
+  echo "⚠ 未找到 .env 文件，Midscene AI 功能将不可用"
+  echo "  请执行: cp $PROJECT/.env.example $PROJECT/.env 并填入 API Key"
+fi
+
+echo ""
+
+# ── 0. 清理残留进程 ──
+echo "=== 0. 清理残留进程 ==="
+pkill -f "uvicorn server:app" 2>/dev/null
+pkill -f "midscene-client" 2>/dev/null
+pkill -f "frps" 2>/dev/null
+# 杀掉云端 adb server，避免和 SSH 隧道冲突
+$ANDROID_HOME/adb kill-server 2>/dev/null
+sleep 1
+
+echo ""
+
+# ── 1. 启动 frp 服务端 ──
 echo "=== 1. 启动 frp 服务端 ==="
 cd $PROJECT
 nohup frps -c deploy/frps.toml > frps-run.log 2>&1 &
@@ -9,6 +39,7 @@ echo "frps PID: $!"
 
 sleep 1
 
+# ── 2. 启动 Midscene 服务 (:9401) ──
 echo "=== 2. 启动 Midscene 服务 (:9401) ==="
 cd $PROJECT
 # 修复 Bun + source-map 兼容性 bug（column = -1 崩溃）
@@ -18,6 +49,7 @@ echo "Midscene PID: $!"
 
 sleep 2
 
+# ── 3. 启动 U2_Service (:9400) ──
 echo "=== 3. 启动 U2_Service (:9400) ==="
 cd $PROJECT/u2-server
 nohup uv run uvicorn server:app --host 0.0.0.0 --port 9400 > u2-server.log 2>&1 &
@@ -25,13 +57,24 @@ echo "U2_Service PID: $!"
 
 sleep 3
 
+# ── 健康检查 ──
 echo ""
 echo "=== 健康检查 ==="
 echo -n "U2_Service:  "; curl -s http://localhost:9400/health 2>/dev/null || echo "FAIL"
 echo ""
 echo -n "Midscene:    "; curl -s http://localhost:9401/health 2>/dev/null || echo "FAIL"
 echo ""
+
+# ── ADB 设备检查 ──
+echo ""
+echo "=== ADB 设备 ==="
+$ANDROID_HOME/adb devices 2>/dev/null || echo "⚠ ADB 不可用（等待 SSH 隧道）"
+
 echo ""
 echo "=== 等待手机端连接 ==="
-echo "1. 手机运行 AutoX.js 服务脚本"
-echo "2. Termux 执行: ./frpc -c frpc.toml"
+echo "1. 本地 Windows 执行: adb kill-server && adb devices"
+echo "2. 本地 Windows 执行: ssh -R 9501:127.0.0.1:9500 -R 5037:127.0.0.1:5037 root@101.32.242.14"
+echo "3. 手机运行 AutoX.js 服务脚本"
+echo "4. 手机 Termux 执行: ./frpc -c frpc.toml"
+echo ""
+echo "隧道建立后，执行: curl -X POST http://localhost:9401/connect"
